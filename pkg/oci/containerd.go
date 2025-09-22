@@ -3,13 +3,11 @@ package oci
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"net/url"
 	"os"
-	"path"
 	"path/filepath"
 	"strings"
 	"text/template"
@@ -23,9 +21,6 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	"github.com/pelletier/go-toml/v2"
-	tomlu "github.com/pelletier/go-toml/v2/unstable"
-	"github.com/spf13/afero"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 
 	"github.com/laixintao/piccolo/internal/channel"
@@ -38,12 +33,11 @@ const (
 var _ Client = &Containerd{}
 
 type Containerd struct {
-	contentPath        string
-	client             *containerd.Client
-	clientGetter       func() (*containerd.Client, error)
-	listFilter         string
-	eventFilter        string
-	registryConfigPath string
+	contentPath  string
+	client       *containerd.Client
+	clientGetter func() (*containerd.Client, error)
+	listFilter   string
+	eventFilter  string
 }
 
 type Option func(*Containerd)
@@ -54,7 +48,7 @@ func WithContentPath(path string) Option {
 	}
 }
 
-func NewContainerd(ctx context.Context, sock, namespace, registryConfigPath string, registries []url.URL, opts ...Option) (*Containerd, error) {
+func NewContainerd(ctx context.Context, sock, namespace string, registries []url.URL, opts ...Option) (*Containerd, error) {
 	listFilter, eventFilter := createFilters(registries)
 	log := logr.FromContextOrDiscard(ctx)
 	log.Info("ContainerdClient Created.", "listFilter", listFilter, "eventFilter", eventFilter)
@@ -63,9 +57,8 @@ func NewContainerd(ctx context.Context, sock, namespace, registryConfigPath stri
 		clientGetter: func() (*containerd.Client, error) {
 			return containerd.New(sock, containerd.WithDefaultNamespace(namespace))
 		},
-		eventFilter:        eventFilter,
-		listFilter:         listFilter,
-		registryConfigPath: registryConfigPath,
+		eventFilter: eventFilter,
+		listFilter:  listFilter,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -117,54 +110,7 @@ func (c *Containerd) Verify(ctx context.Context) error {
 		return nil
 	}
 
-	statusResp, err := srv.Status(ctx, &runtimeapi.StatusRequest{Verbose: true})
-	if err != nil {
-		return err
-	}
-	err = verifyStatusResponse(statusResp, c.registryConfigPath)
-	if err != nil {
-		return err
-	}
 	return nil
-}
-
-func verifyStatusResponse(resp *runtimeapi.StatusResponse, configPath string) error {
-	str, ok := resp.Info["config"]
-	if !ok {
-		return errors.New("could not get config data from info response")
-	}
-	cfg := &struct {
-		Registry struct {
-			ConfigPath *string `json:"configPath"`
-		} `json:"registry"`
-		Containerd struct {
-			DiscardUnpackedLayers *bool `json:"discardUnpackedLayers"`
-		} `json:"containerd"`
-	}{}
-	err := json.Unmarshal([]byte(str), cfg)
-	if err != nil {
-		return err
-	}
-	if cfg.Containerd.DiscardUnpackedLayers == nil {
-		return errors.New("field containerd.discardUnpackedLayers missing from config")
-	}
-	if *cfg.Containerd.DiscardUnpackedLayers {
-		return errors.New("Containerd discard unpacked layers cannot be enabled")
-	}
-	if cfg.Registry.ConfigPath == nil {
-		return errors.New("field registry.configPath missing from config")
-	}
-	if *cfg.Registry.ConfigPath == "" {
-		return errors.New("Containerd registry config path needs to be set for mirror configuration to take effect")
-	}
-	paths := filepath.SplitList(*cfg.Registry.ConfigPath)
-	for _, path := range paths {
-		if path != configPath {
-			continue
-		}
-		return nil
-	}
-	return fmt.Errorf("Containerd registry config path is %s but needs to contain path %s for mirror configuration to take effect", *cfg.Registry.ConfigPath, configPath)
 }
 
 func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan error, error) {
@@ -348,62 +294,6 @@ func createFilters(registries []url.URL) (string, string) {
 	return listFilter, eventFilter
 }
 
-// Refer to containerd registry configuration documentation for more information about required configuration.
-// https://github.com/containerd/containerd/blob/main/docs/cri/config.md#registry-configuration
-// https://github.com/containerd/containerd/blob/main/docs/hosts.md#registry-configuration---examples
-func AddMirrorConfiguration(ctx context.Context, fs afero.Fs, configPath string, registryURLs, mirrorURLs []url.URL, resolveTags, appendToBackup bool) error {
-	log := logr.FromContextOrDiscard(ctx)
-	err := validateRegistries(registryURLs)
-	if err != nil {
-		return err
-	}
-	err = fs.MkdirAll(configPath, 0o755)
-	if err != nil {
-		return err
-	}
-	err = backupConfig(log, fs, configPath)
-	if err != nil {
-		return err
-	}
-	err = clearConfig(fs, configPath)
-	if err != nil {
-		return err
-	}
-
-	// Write mirror configuration
-	capabilities := []string{"pull"}
-	if resolveTags {
-		capabilities = append(capabilities, "resolve")
-	}
-	for _, registryURL := range registryURLs {
-		templatedHosts, err := templateHosts(registryURL, mirrorURLs, capabilities)
-		if err != nil {
-			return err
-		}
-		if appendToBackup {
-			existingHosts, err := existingHosts(fs, configPath, registryURL)
-			if err != nil {
-				return err
-			}
-			if existingHosts != "" {
-				templatedHosts = templatedHosts + "\n\n" + existingHosts
-			}
-			log.Info("appending to existing Containerd mirror configuration", "registry", registryURL.String())
-		}
-		fp := path.Join(configPath, registryURL.Host, "hosts.toml")
-		err = fs.MkdirAll(path.Dir(fp), 0o755)
-		if err != nil {
-			return err
-		}
-		err = afero.WriteFile(fs, fp, []byte(templatedHosts), 0o644)
-		if err != nil {
-			return err
-		}
-		log.Info("added Containerd mirror configuration", "registry", registryURL.String(), "path", fp)
-	}
-	return nil
-}
-
 func validateRegistries(urls []url.URL) error {
 	errs := []error{}
 	for _, u := range urls {
@@ -421,53 +311,6 @@ func validateRegistries(urls []url.URL) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func backupConfig(log logr.Logger, fs afero.Fs, configPath string) error {
-	backupDirPath := path.Join(configPath, backupDir)
-	ok, err := afero.DirExists(fs, backupDirPath)
-	if err != nil {
-		return err
-	}
-	if ok {
-		return nil
-	}
-	files, err := afero.ReadDir(fs, configPath)
-	if err != nil {
-		return err
-	}
-	err = fs.MkdirAll(backupDirPath, 0o755)
-	if err != nil {
-		return err
-	}
-	for _, fi := range files {
-		oldPath := path.Join(configPath, fi.Name())
-		newPath := path.Join(backupDirPath, fi.Name())
-		err := fs.Rename(oldPath, newPath)
-		if err != nil {
-			return err
-		}
-		log.Info("backing up Containerd host configuration", "path", oldPath)
-	}
-	return nil
-}
-
-func clearConfig(fs afero.Fs, configPath string) error {
-	files, err := afero.ReadDir(fs, configPath)
-	if err != nil {
-		return err
-	}
-	for _, fi := range files {
-		if fi.Name() == backupDir {
-			continue
-		}
-		filePath := path.Join(configPath, fi.Name())
-		err := fs.RemoveAll(filePath)
-		if err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 func templateHosts(registryURL url.URL, mirrorURLs []url.URL, capabilities []string) (string, error) {
@@ -502,60 +345,7 @@ capabilities = {{ $.Capabilities }}
 	return strings.TrimSpace(buf.String()), nil
 }
 
+
 type hostFile struct {
 	Hosts map[string]interface{} `toml:"host"`
-}
-
-func existingHosts(fs afero.Fs, configPath string, registryURL url.URL) (string, error) {
-	fp := path.Join(configPath, backupDir, registryURL.Host, "hosts.toml")
-	b, err := afero.ReadFile(fs, fp)
-	if errors.Is(err, afero.ErrFileNotFound) {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-
-	var hf hostFile
-	err = toml.Unmarshal(b, &hf)
-	if err != nil {
-		return "", err
-	}
-	if len(hf.Hosts) == 0 {
-		return "", nil
-	}
-
-	hosts := []string{}
-	parser := tomlu.Parser{}
-	parser.Reset(b)
-	for parser.NextExpression() {
-		err := parser.Error()
-		if err != nil {
-			return "", err
-		}
-		e := parser.Expression()
-		if e.Kind != tomlu.Table {
-			continue
-		}
-		ki := e.Key()
-		if ki.Next() && string(ki.Node().Data) == "host" && ki.Next() && ki.IsLast() {
-			hosts = append(hosts, string(ki.Node().Data))
-		}
-	}
-
-	ehs := []string{}
-	for _, h := range hosts {
-		data := hostFile{
-			Hosts: map[string]interface{}{
-				h: hf.Hosts[h],
-			},
-		}
-		b, err := toml.Marshal(data)
-		if err != nil {
-			return "", err
-		}
-		eh := strings.TrimPrefix(string(b), "[host]\n")
-		ehs = append(ehs, eh)
-	}
-	return strings.TrimSpace(strings.Join(ehs, "\n")), nil
 }
