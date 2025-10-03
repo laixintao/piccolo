@@ -6,5 +6,5 @@ debug:
 		--containerd-sock /var/run/containerd/containerd.sock \
 		--containerd-namespace k8s.io \
 		--containerd-content-path /var/lib/containerd/io.containerd.content.v1.content \
-		--registries ${REGISTRY_DOMAIN_LIST} \
+		--registries '${REGISTRY_DOMAIN_LIST}' \
 		--log-level DEBUG

@@ -164,16 +164,13 @@ func (c *Containerd) ListImages(ctx context.Context) ([]Image, error) {
 	if err != nil {
 		return nil, err
 	}
+	log.Info("list images with filter", "filter", c.listFilter)
 	cImgs, err := client.ListImages(ctx, c.listFilter)
 	if err != nil {
 		return nil, err
 	}
 	imgs := []Image{}
 	for _, cImg := range cImgs {
-		log.Info("1print all images, got image", "cImg.Name()", cImg.Name(), "cImg.Target()", cImg.Target().Digest)
-	}
-	for _, cImg := range cImgs {
-		log.Info("2List images, got image", "cImg.Name()", cImg.Name(), "cImg.Target()", cImg.Target().Digest)
 		if strings.HasPrefix(cImg.Name(), "sha256") {
 			continue
 		}
