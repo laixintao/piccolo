@@ -1,4 +1,4 @@
-go run main.go \
+go run cmd/pi/main.go \
     --containerd-sock /var/run/containerd/containerd.sock \
     --containerd-namespace k8s.io \
     --containerd-content-path /var/lib/containerd/io.containerd.content.v1.content \
@@ -8,4 +8,4 @@ go run main.go \
     --log-level DEBUG \
     --resolve-latest-tag=false \
     --full-refresh-minutes 5 \
-    --piccolo-address http://example.com
+    --piccolo-address http://example.com | cut -c-200
