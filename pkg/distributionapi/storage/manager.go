@@ -8,6 +8,8 @@ import (
 	"gorm.io/gorm/clause"
 )
 
+const MaxBatch = 1000
+
 type DistributionManagerInterface interface {
 	CreateDistributions(distributions []*model.Distribution) error
 	GetHolderByKey(key string, limit int) ([]*model.Distribution, error)
@@ -29,8 +31,25 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 		return nil
 	}
 
-	m.db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(distributions, 1000)
+	m.db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(distributions, MaxBatch)
 	return nil
+}
+
+func (m *DistributionManager) SyncDistributions(holder string, distributions []*model.Distribution) error {
+	if len(distributions) == 0 {
+		return nil
+	}
+	return m.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Where("holder = ?", holder).Delete(&model.Distribution{}).Error; err != nil {
+			return err
+		}
+
+		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
+			return err
+		}
+
+		return nil
+	})
 }
 
 func (m *DistributionManager) GetHolderByKey(key string, limit int) ([]*model.Distribution, error) {

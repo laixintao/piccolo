@@ -84,6 +84,7 @@ func main() {
 		{
 			images.POST("/advertise", distributionHandler.AdvertiseImage)
 			images.GET("/findkey", distributionHandler.FindKey)
+			images.POST("/sync", distributionHandler.Sync)
 		}
 	}
 

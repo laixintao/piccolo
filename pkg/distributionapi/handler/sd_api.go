@@ -121,3 +121,59 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		Holders: holders,
 	})
 }
+
+// sync api will delete all the holder's key, and then insert the current keys
+// POST /api/v1/distribution/sync
+func (h *DistributionHandler) Sync(c *gin.Context) {
+	var req model.ImageAdvertiseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.log.Error(err, "failed to bind JSON request")
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "Wrong reuqest format: " + err.Error(),
+		})
+		return
+	}
+
+	if req.Holder == "" {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "holder is empty!",
+		})
+		return
+	}
+
+	distributions := make([]*model.Distribution, 0, len(req.Keys))
+	for _, key := range req.Keys {
+		if key == "" {
+			continue
+		}
+		distributions = append(distributions, &model.Distribution{
+			Key:    key,
+			Holder: req.Holder,
+		})
+	}
+
+	if len(distributions) == 0 {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "No operation needed",
+		})
+		return
+	}
+
+	if err := h.m.SyncDistributions(req.Holder, distributions); err != nil {
+		h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
+		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "Error when create distribution in batch" + err.Error(),
+		})
+		return
+	}
+
+	h.log.Info("distributions created successfully", "holder", req.Holder, "count", len(distributions))
+	c.JSON(http.StatusCreated, model.ImageAdvertiseResponse{
+		Success: true,
+		Message: "Distribution created!",
+	})
+}
