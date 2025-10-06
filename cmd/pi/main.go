@@ -1,34 +1,40 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"time"
 
 	"context"
-	"github.com/gin-gonic/gin"
+	"log/slog"
+	"net/http"
+	"net/url"
+	"os"
+
 	"github.com/alexflint/go-arg"
 	"github.com/go-logr/logr"
 	"github.com/laixintao/piccolo/pkg/oci"
+	"github.com/laixintao/piccolo/pkg/registry"
 	"github.com/laixintao/piccolo/pkg/sd"
 	"github.com/laixintao/piccolo/pkg/state"
-	"github.com/laixintao/piccolo/pkg/registry"
 	"golang.org/x/sync/errgroup"
-	"log/slog"
-	"net/url"
-	"os"
 )
 
 type Arguments struct {
-	RegistryAddr string `arg:"--registry-addr,env:REGISTRY_ADDR,required" help:"address to serve image registry (for local containerd, you can use 127.0.0.1, as long as it can be connected for your containerd)"`
-	PiAddr       string `arg:"--pi-addr,env:PI_ADDR,required" help:"address to serve downloading for other pi agents, other agents will download images from this address"`
+	RegistryAddr string `arg:"--registry-listen-addr,env:REGISTRY_ADDR,required" help:"address to serve image registry (for local containerd, you can use 127.0.0.1, as long as it can be connected for your containerd)"`
+	PiAddr       string `arg:"--pi-listen-addr,env:PI_ADDR,required" help:"address to serve downloading for other pi agents, other agents will download images from this address"`
 
-	ContainerdSock        string     `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
-	ContainerdNamespace   string     `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
-	ContainerdContentPath string     `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
-	Registries            []url.URL  `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
-	LogLevel              slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
-	ResolveLatestTag      bool       `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
-	PiccoloAddress        url.URL    `arg:"--piccolo-address,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
-	FullRefreshMinutes    int64      `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" help:"pi will update all image states to piccolo for every X minutes."`
+	ContainerdSock        string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
+	ContainerdNamespace   string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
+	ContainerdContentPath string        `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
+	Registries            []url.URL     `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
+	LogLevel              slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
+	ResolveLatestTag      bool          `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
+	PiccoloAddress        url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
+	FullRefreshMinutes    int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" help:"pi will update all image states to piccolo for every X minutes."`
+	MaxUploadConnections  int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
+	MirrorResolveTimeout  time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"20ms" help:"Max duration spent finding a mirror."`
+	MirrorResolveRetries  int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
 }
 
 func main() {
@@ -68,32 +74,76 @@ func main() {
 		)
 	}
 
-	// start http server
-	registryServer := gin.Default()
-	// Start server with configured host and port
-	if err := registryServer.Run(args.RegistryAddr); err != nil {
-		log.Error(err, "server failed to start registry service")
+	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log)
+	if err != nil {
+		log.Error(err, "NewPiccoloServiceDiscover error")
 		os.Exit(1)
 	}
 
-	piServer := gin.Default()
-	// Start server with configured host and port
-	if err := piServer.Run(args.PiAddr); err != nil {
-		log.Error(err, "server failed to start pi agent service")
+	g, ctx := errgroup.WithContext(ctx)
+
+	// Pi Server
+	err = startPiServer(ctx, args.MaxUploadConnections, ociClient, piccoloSD, log, args.PiAddr, g)
+	if err != nil {
+		log.Error(err, "Error when start Pi Server")
 		os.Exit(1)
 	}
+	log.Info("Start Pi server", "address", args.PiAddr)
 
 	// Registry
 	registryOpts := []registry.Option{
 		registry.WithResolveLatestTag(args.ResolveLatestTag),
 		registry.WithResolveRetries(args.MirrorResolveRetries),
 		registry.WithResolveTimeout(args.MirrorResolveTimeout),
-		registry.WithLocalAddress(args.LocalAddr),
-		registry.WithLogger(log),
-		registry.WithMaxUploadConnection(args.MaxUploadConnections),
 	}
-	reg := registry.NewRegistry(ociClient, router, registryOpts...)
-	regSrv, err := reg.Server(args.RegistryAddr)
+	err = startRegistryServer(ctx, ociClient, piccoloSD, log, args.RegistryAddr, g, registryOpts...)
+	if err != nil {
+		log.Error(err, "Error when start Registry Server")
+		os.Exit(1)
+	}
+	log.Info("Start registry server", "address", args.RegistryAddr)
+
+	// State tracking
+	g.Go(func() error {
+		return state.Track(ctx, ociClient, piccoloSD, args.FullRefreshMinutes, args.ResolveLatestTag)
+	})
+
+	err = g.Wait()
+	if err != nil {
+		log.Error(err, "Error when g.Wait()")
+		os.Exit(1)
+	}
+}
+
+func startPiServer(ctx context.Context, maxConnection int,
+	ociClient oci.Client, sd sd.ServiceDiscover, log logr.Logger, piAddr string, g *errgroup.Group) error {
+	piServerOptions := []registry.PiServerOption{
+		registry.WithMaxUploadConnection(maxConnection),
+	}
+	reg := registry.NewPiServer(ociClient, log, sd, piServerOptions...)
+	regSrv, err := reg.Server(piAddr)
+	if err != nil {
+		return err
+	}
+	g.Go(func() error {
+		if err := regSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return regSrv.Shutdown(shutdownCtx)
+	})
+	return nil
+}
+
+func startRegistryServer(ctx context.Context,
+	ociClient oci.Client, sd sd.ServiceDiscover, log logr.Logger, registryAddress string, g *errgroup.Group, registryOpts ...registry.Option) error {
+	reg := registry.NewRegistry(sd, log, registryOpts...)
+	regSrv, err := reg.Server(registryAddress)
 	if err != nil {
 		return err
 	}
@@ -110,24 +160,5 @@ func main() {
 		return regSrv.Shutdown(shutdownCtx)
 	})
 
-	log.Info("running Spegel", "registry", args.RegistryAddr, "router", args.RouterAddr)
-
-	g, ctx := errgroup.WithContext(ctx)
-
-	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress)
-	if err != nil {
-		log.Error(err, "NewPiccoloServiceDiscover error")
-		os.Exit(1)
-	}
-
-	// State tracking
-	g.Go(func() error {
-		return state.Track(ctx, ociClient, piccoloSD, args.FullRefreshMinutes, args.ResolveLatestTag)
-	})
-
-	err = g.Wait()
-	if err != nil {
-		log.Error(err, "Error when g.Wait()")
-		os.Exit(1)
-	}
+	return nil
 }
