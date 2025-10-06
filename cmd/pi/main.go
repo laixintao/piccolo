@@ -10,6 +10,7 @@ import (
 	"github.com/laixintao/piccolo/pkg/oci"
 	"github.com/laixintao/piccolo/pkg/sd"
 	"github.com/laixintao/piccolo/pkg/state"
+	"github.com/laixintao/piccolo/pkg/registry"
 	"golang.org/x/sync/errgroup"
 	"log/slog"
 	"net/url"
@@ -81,6 +82,35 @@ func main() {
 		log.Error(err, "server failed to start pi agent service")
 		os.Exit(1)
 	}
+
+	// Registry
+	registryOpts := []registry.Option{
+		registry.WithResolveLatestTag(args.ResolveLatestTag),
+		registry.WithResolveRetries(args.MirrorResolveRetries),
+		registry.WithResolveTimeout(args.MirrorResolveTimeout),
+		registry.WithLocalAddress(args.LocalAddr),
+		registry.WithLogger(log),
+		registry.WithMaxUploadConnection(args.MaxUploadConnections),
+	}
+	reg := registry.NewRegistry(ociClient, router, registryOpts...)
+	regSrv, err := reg.Server(args.RegistryAddr)
+	if err != nil {
+		return err
+	}
+	g.Go(func() error {
+		if err := regSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return regSrv.Shutdown(shutdownCtx)
+	})
+
+	log.Info("running Spegel", "registry", args.RegistryAddr, "router", args.RouterAddr)
 
 	g, ctx := errgroup.WithContext(ctx)
 
