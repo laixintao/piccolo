@@ -27,8 +27,9 @@ const (
 )
 
 type ImageEvent struct {
-	Image Image
-	Type  EventType
+	ImageName string
+	Image     Image
+	Type      EventType
 }
 
 func NewImage(name, registry, repository, tag string, dgst digest.Digest) (Image, error) {

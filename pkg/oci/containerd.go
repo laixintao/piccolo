@@ -146,13 +146,13 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 					continue
 				}
 			case DeleteEvent:
-				img, err = Parse(imageName, "")
-				if err != nil {
-					errCh <- err
-					continue
-				}
+				// in DeleteEvent, containerd won't tell us the image digest
+				// we also can not walk this image, so it will trigger a full
+				// update event
+				log := logr.FromContextOrDiscard(ctx)
+				log.Info("Delete image", "imageName", imageName)
 			}
-			imgCh <- ImageEvent{Image: img, Type: eventType}
+			imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}
 		}
 	}()
 	return imgCh, channel.Merge(errCh, cErrCh), nil
@@ -341,7 +341,6 @@ capabilities = {{ $.Capabilities }}
 	}
 	return strings.TrimSpace(buf.String()), nil
 }
-
 
 type hostFile struct {
 	Hosts map[string]interface{} `toml:"host"`

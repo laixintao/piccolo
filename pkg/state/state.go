@@ -23,7 +23,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ful
 	immediateCh := make(chan time.Time, 1)
 	immediateCh <- time.Now()
 	close(immediateCh)
-	expirationTicker := time.NewTicker(time.Duration(fullRefreshMinutes) *  time.Minute)
+	expirationTicker := time.NewTicker(time.Duration(fullRefreshMinutes) * time.Minute)
 	defer expirationTicker.Stop()
 	tickerCh := channel.Merge(immediateCh, expirationTicker.C)
 	for {
@@ -41,6 +41,15 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ful
 				return errors.New("image event channel closed")
 			}
 			log.Info("received image event", "image", event.Image.String(), "type", event.Type)
+
+			// Delete event will trigger full upates...
+			if event.Type == oci.DeleteEvent {
+				if err := all(ctx, ociClient, sd, resolveLatestTag); err != nil {
+					log.Error(err, "received errors when updating all images")
+				}
+				continue
+			}
+
 			if _, err := update(ctx, ociClient, sd, event, false, resolveLatestTag); err != nil {
 				log.Error(err, "received error when updating image")
 				continue
@@ -63,7 +72,6 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 		return err
 	}
 
-	// TODO: Update metrics on subscribed events. This will require keeping state in memory to know about key count changes.
 	metrics.AdvertisedKeys.Reset()
 	metrics.AdvertisedImages.Reset()
 	metrics.AdvertisedImageTags.Reset()
@@ -101,11 +109,8 @@ func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ev
 		}
 	}
 	if event.Type == oci.DeleteEvent {
-		// We don't know how many digest keys were associated with the deleted image;
-		// that can only be updated by the full image list sync in all().
-		metrics.AdvertisedImages.WithLabelValues(event.Image.Registry).Sub(1)
-		// DHT doesn't actually have any way to stop providing a key, you just have to wait for the record to expire
-		// from the datastore. Record TTL is a datastore-level value, so we can't even re-provide with a shorter TTL.
+		log := logr.FromContextOrDiscard(ctx)
+		log.Error(errors.New("Shouldn't reach there"), "DeleteEvent should be handled by all()")
 		return 0, nil
 	}
 	if !skipDigests {
