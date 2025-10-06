@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"context"
+	"github.com/gin-gonic/gin"
 	"github.com/alexflint/go-arg"
 	"github.com/go-logr/logr"
 	"github.com/laixintao/piccolo/pkg/oci"
@@ -16,6 +17,9 @@ import (
 )
 
 type Arguments struct {
+	RegistryAddr string `arg:"--registry-addr,env:REGISTRY_ADDR,required" help:"address to serve image registry (for local containerd, you can use 127.0.0.1, as long as it can be connected for your containerd)"`
+	PiAddr       string `arg:"--pi-addr,env:PI_ADDR,required" help:"address to serve downloading for other pi agents, other agents will download images from this address"`
+
 	ContainerdSock        string     `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
 	ContainerdNamespace   string     `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
 	ContainerdContentPath string     `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
@@ -61,6 +65,21 @@ func main() {
 			"Tag", item.Tag,
 			"Digest", item.Digest,
 		)
+	}
+
+	// start http server
+	registryServer := gin.Default()
+	// Start server with configured host and port
+	if err := registryServer.Run(args.RegistryAddr); err != nil {
+		log.Error(err, "server failed to start registry service")
+		os.Exit(1)
+	}
+
+	piServer := gin.Default()
+	// Start server with configured host and port
+	if err := piServer.Run(args.PiAddr); err != nil {
+		log.Error(err, "server failed to start pi agent service")
+		os.Exit(1)
 	}
 
 	g, ctx := errgroup.WithContext(ctx)

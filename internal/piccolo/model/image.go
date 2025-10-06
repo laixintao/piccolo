@@ -7,7 +7,6 @@ import (
 	"gorm.io/gorm"
 )
 
-// ImageRecord 表示存储在数据库中的镜像记录
 type ImageRecord struct {
 	ID         uint          `gorm:"primaryKey" json:"id"`
 	UUID       string        `gorm:"uniqueIndex;size:36" json:"uuid"`
@@ -23,12 +22,10 @@ type ImageRecord struct {
 	DeletedAt  gorm.DeletedAt `gorm:"index" json:"-"`
 }
 
-// TableName 指定表名
 func (ImageRecord) TableName() string {
 	return "images"
 }
 
-// CreateImageRequest 表示创建镜像的请求结构
 type CreateImageRequest struct {
 	Name       string        `json:"name" binding:"required"`
 	Registry   string        `json:"registry" binding:"required"`
@@ -39,14 +36,12 @@ type CreateImageRequest struct {
 	Metadata   string        `json:"metadata"`
 }
 
-// CreateImageResponse 表示创建镜像的响应结构
 type CreateImageResponse struct {
 	Success bool         `json:"success"`
 	Message string       `json:"message"`
 	Image   *ImageRecord `json:"image,omitempty"`
 }
 
-// ListImagesResponse 表示查询镜像列表的响应结构
 type ListImagesResponse struct {
 	Success bool           `json:"success"`
 	Message string         `json:"message"`

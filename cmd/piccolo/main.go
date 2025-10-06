@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"net/http"
 	"os"
 
@@ -15,8 +14,7 @@ import (
 )
 
 type Arguments struct {
-	Host       string     `arg:"--host,env:HOST" default:"0.0.0.0" help:"Host to listen on"`
-	Port       int        `arg:"--port,env:PORT" default:"8080" help:"Port to listen on"`
+	PiccoloAddress       string     `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
 	LogLevel   slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
 	DBHost     string     `arg:"--db-host,env:DB_HOST" default:"localhost" help:"MySQL database host"`
 	DBPort     int        `arg:"--db-port,env:DB_PORT" default:"3306" help:"MySQL database port"`
@@ -92,11 +90,10 @@ func main() {
 		}
 	}
 
-	log.Info("server starting", "host", args.Host, "port", args.Port)
+	log.Info("server starting", "piccolo-address", args.PiccoloAddress)
 
 	// Start server with configured host and port
-	addr := fmt.Sprintf("%s:%d", args.Host, args.Port)
-	if err := r.Run(addr); err != nil {
+	if err := r.Run(args.PiccoloAddress); err != nil {
 		log.Error(err, "server failed to start")
 		os.Exit(1)
 	}
