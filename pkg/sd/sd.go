@@ -41,7 +41,6 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	p.log.Info("Resolve key", "key", key, "count", count)
 	addrs := []netip.AddrPort{
 		netip.MustParseAddrPort("192.168.0.1:8080"),
-		netip.MustParseAddrPort("192.168.0.2:8080"),
 	}
 	return addrs, nil
 }

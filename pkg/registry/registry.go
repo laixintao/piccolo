@@ -148,6 +148,7 @@ func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 
 	// Parse out path components from request.
 	originalRegistry := req.URL.Query().Get("ns")
+	r.log.Info("request v2 registry", "path", req.URL, "method" , req.Method)
 	ref, err := parsePathComponents(originalRegistry, req.URL.Path)
 	if err != nil {
 		rw.WriteError(http.StatusNotFound, fmt.Errorf("could not parse path according to OCI distribution spec: %w", err))
@@ -159,10 +160,11 @@ func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 		// Set mirrored header in request to stop infinite loops
 		req.Header.Set(MirroredHeaderKey, "true")
 		r.handleMirror(rw, req, ref)
+		return "mirror"
 	}
 
 	r.log.Error(errors.New("request mirrored already"), "This request has already been mirrored")
-	return "mirror"
+	return "error"
 }
 
 func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref reference) {
@@ -233,8 +235,9 @@ func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Req
 	proxy := httputil.NewSingleHostReverseProxy(u)
 	proxy.BufferPool = r.bufferPool
 	proxy.Transport = r.transport
-	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
+	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, err error) {
 		r.log.Error(err, "request to mirror failed")
+		http.Error(rw, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if resp.StatusCode != http.StatusOK {
