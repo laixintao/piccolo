@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"os"
-	"path/filepath"
 
 	"log/slog"
 
@@ -16,14 +15,17 @@ import (
 )
 
 type Arguments struct {
-	Host     string     `arg:"--host,env:HOST" default:"0.0.0.0" help:"Host to listen on"`
-	Port     int        `arg:"--port,env:PORT" default:"8080" help:"Port to listen on"`
-	LogLevel slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
-	DBPath   string     `arg:"--db-path,env:DB_PATH" default:"./piccolo.db" help:"Path to the BoltDB database file"`
+	Host       string     `arg:"--host,env:HOST" default:"0.0.0.0" help:"Host to listen on"`
+	Port       int        `arg:"--port,env:PORT" default:"8080" help:"Port to listen on"`
+	LogLevel   slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
+	DBHost     string     `arg:"--db-host,env:DB_HOST" default:"localhost" help:"MySQL database host"`
+	DBPort     int        `arg:"--db-port,env:DB_PORT" default:"3306" help:"MySQL database port"`
+	DBUser     string     `arg:"--db-user,env:DB_USER" default:"root" help:"MySQL database user"`
+	DBPassword string     `arg:"--db-password,env:DB_PASSWORD" default:"" help:"MySQL database password"`
+	DBName     string     `arg:"--db-name,env:DB_NAME" default:"piccolo" help:"MySQL database name"`
 }
 
 func main() {
-	// Parse command line arguments
 	args := &Arguments{}
 	arg.MustParse(args)
 
@@ -35,47 +37,58 @@ func main() {
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init, Piccolo started")
 
-	// 确保数据库目录存在
-	dbDir := filepath.Dir(args.DBPath)
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
-		log.Error(err, "failed to create database directory")
+	// 配置数据库连接
+	dbConfig := &storage.DatabaseConfig{
+		Host:     args.DBHost,
+		Port:     args.DBPort,
+		User:     args.DBUser,
+		Password: args.DBPassword,
+		Database: args.DBName,
+		Charset:  "utf8mb4",
+		ParseTime: true,
+		Loc:      "Local",
+		MaxIdleConns: 10,
+		MaxOpenConns: 100,
+	}
+
+	// 初始化MySQL连接
+	db, err := storage.InitMySQL(dbConfig)
+	if err != nil {
+		log.Error(err, "failed to connect to MySQL database")
 		os.Exit(1)
 	}
 
-	// 初始化数据库存储
-	imageStore, err := storage.NewBoltImageStore(args.DBPath)
+	log.Info("MySQL database connected", "host", args.DBHost, "database", args.DBName)
+
+	// 初始化镜像存储
+	imageStore, err := storage.NewGormImageStore(db)
 	if err != nil {
 		log.Error(err, "failed to initialize image store")
 		os.Exit(1)
 	}
 	defer imageStore.Close()
 
-	log.Info("database initialized", "path", args.DBPath)
+	log.Info("image store initialized")
 
-	// 创建API处理器
 	imageHandler := imagehandler.NewImageHandler(imageStore, log)
 
-	// Create a Gin router with default middleware (logger and recovery)
 	r := gin.Default()
 
-	// 健康检查端点
 	r.GET("/ping", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
 			"message": "pong",
 		})
 	})
 
-	// API路由组
 	v1 := r.Group("/api/v1")
 	{
-		// 镜像相关API
 		images := v1.Group("/images")
 		{
-			images.POST("", imageHandler.CreateImage)       // 创建镜像记录
-			images.GET("", imageHandler.ListImages)         // 获取镜像列表
-			images.GET("/:id", imageHandler.GetImage)       // 获取单个镜像
-			images.PUT("/:id", imageHandler.UpdateImage)    // 更新镜像记录
-			images.DELETE("/:id", imageHandler.DeleteImage) // 删除镜像记录
+			images.POST("", imageHandler.CreateImage)          // 创建镜像记录
+			images.GET("", imageHandler.ListImages)            // 获取镜像列表
+			images.GET("/:uuid", imageHandler.GetImage)        // 获取单个镜像
+			images.PUT("/:uuid", imageHandler.UpdateImage)     // 更新镜像记录
+			images.DELETE("/:uuid", imageHandler.DeleteImage)  // 删除镜像记录
 		}
 	}
 

@@ -53,7 +53,7 @@ func (h *ImageHandler) CreateImage(c *gin.Context) {
 		Registry:   req.Registry,
 		Repository: req.Repository,
 		Tag:        req.Tag,
-		Digest:     req.Digest,
+		Digest:     string(req.Digest),
 		Size:       req.Size,
 		Metadata:   req.Metadata,
 	}
@@ -67,7 +67,7 @@ func (h *ImageHandler) CreateImage(c *gin.Context) {
 		return
 	}
 
-	h.log.Info("image created successfully", "id", imageRecord.ID, "name", imageRecord.Name)
+	h.log.Info("image created successfully", "uuid", imageRecord.UUID, "name", imageRecord.Name)
 	c.JSON(http.StatusCreated, model.CreateImageResponse{
 		Success: true,
 		Message: "镜像记录创建成功",
@@ -76,20 +76,20 @@ func (h *ImageHandler) CreateImage(c *gin.Context) {
 }
 
 // GetImage 获取单个镜像记录的API处理器
-// GET /api/v1/images/:id
+// GET /api/v1/images/:uuid
 func (h *ImageHandler) GetImage(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
+	uuid := c.Param("uuid")
+	if uuid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "镜像ID不能为空",
+			"message": "镜像UUID不能为空",
 		})
 		return
 	}
 
-	image, err := h.store.GetImage(id)
+	image, err := h.store.GetImage(uuid)
 	if err != nil {
-		h.log.Error(err, "failed to get image", "id", id)
+		h.log.Error(err, "failed to get image", "uuid", uuid)
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
 			"message": "镜像不存在",
@@ -155,18 +155,18 @@ func (h *ImageHandler) ListImages(c *gin.Context) {
 		Success: true,
 		Message: "获取镜像列表成功",
 		Images:  pagedImages,
-		Total:   total,
+		Total:   int64(total),
 	})
 }
 
 // UpdateImage 更新镜像记录的API处理器
-// PUT /api/v1/images/:id
+// PUT /api/v1/images/:uuid
 func (h *ImageHandler) UpdateImage(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
+	uuid := c.Param("uuid")
+	if uuid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "镜像ID不能为空",
+			"message": "镜像UUID不能为空",
 		})
 		return
 	}
@@ -182,9 +182,9 @@ func (h *ImageHandler) UpdateImage(c *gin.Context) {
 	}
 
 	// 获取现有记录
-	existingImage, err := h.store.GetImage(id)
+	existingImage, err := h.store.GetImage(uuid)
 	if err != nil {
-		h.log.Error(err, "failed to get existing image", "id", id)
+		h.log.Error(err, "failed to get existing image", "uuid", uuid)
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
 			"message": "镜像不存在",
@@ -197,7 +197,7 @@ func (h *ImageHandler) UpdateImage(c *gin.Context) {
 	existingImage.Registry = req.Registry
 	existingImage.Repository = req.Repository
 	existingImage.Tag = req.Tag
-	existingImage.Digest = req.Digest
+	existingImage.Digest = string(req.Digest)
 	existingImage.Size = req.Size
 	existingImage.Metadata = req.Metadata
 
@@ -210,7 +210,7 @@ func (h *ImageHandler) UpdateImage(c *gin.Context) {
 		return
 	}
 
-	h.log.Info("image updated successfully", "id", id)
+	h.log.Info("image updated successfully", "uuid", uuid)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "镜像记录更新成功",
@@ -219,21 +219,21 @@ func (h *ImageHandler) UpdateImage(c *gin.Context) {
 }
 
 // DeleteImage 删除镜像记录的API处理器
-// DELETE /api/v1/images/:id
+// DELETE /api/v1/images/:uuid
 func (h *ImageHandler) DeleteImage(c *gin.Context) {
-	id := c.Param("id")
-	if id == "" {
+	uuid := c.Param("uuid")
+	if uuid == "" {
 		c.JSON(http.StatusBadRequest, gin.H{
 			"success": false,
-			"message": "镜像ID不能为空",
+			"message": "镜像UUID不能为空",
 		})
 		return
 	}
 
 	// 检查镜像是否存在
-	_, err := h.store.GetImage(id)
+	_, err := h.store.GetImage(uuid)
 	if err != nil {
-		h.log.Error(err, "image not found", "id", id)
+		h.log.Error(err, "image not found", "uuid", uuid)
 		c.JSON(http.StatusNotFound, gin.H{
 			"success": false,
 			"message": "镜像不存在",
@@ -241,7 +241,7 @@ func (h *ImageHandler) DeleteImage(c *gin.Context) {
 		return
 	}
 
-	if err := h.store.DeleteImage(id); err != nil {
+	if err := h.store.DeleteImage(uuid); err != nil {
 		h.log.Error(err, "failed to delete image record")
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"success": false,
@@ -250,7 +250,7 @@ func (h *ImageHandler) DeleteImage(c *gin.Context) {
 		return
 	}
 
-	h.log.Info("image deleted successfully", "id", id)
+	h.log.Info("image deleted successfully", "uuid", uuid)
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "镜像记录删除成功",
