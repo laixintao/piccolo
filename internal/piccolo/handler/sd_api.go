@@ -11,11 +11,11 @@ import (
 )
 
 type ImageHandler struct {
-	store storage.ImageStore
+	store storage.DistributionStore
 	log   logr.Logger
 }
 
-func NewImageHandler(store storage.ImageStore, log logr.Logger) *ImageHandler {
+func NewImageHandler(store storage.DistributionStore, log logr.Logger) *ImageHandler {
 	return &ImageHandler{
 		store: store,
 		log:   log,
@@ -254,5 +254,72 @@ func (h *ImageHandler) DeleteImage(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "镜像记录删除成功",
+	})
+}
+
+// AdvertiseImage 广播镜像分发信息的API处理器
+// POST /api/v1/images/advertise
+func (h *ImageHandler) AdvertiseImage(c *gin.Context) {
+	var req model.ImageAdvertiseRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		h.log.Error(err, "failed to bind JSON request")
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "无效的请求格式: " + err.Error(),
+		})
+		return
+	}
+
+	// 验证请求参数
+	if req.Holder == "" {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "holder 不能为空",
+		})
+		return
+	}
+
+	if len(req.Keys) == 0 {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "keys 不能为空",
+		})
+		return
+	}
+
+	// 构建 Distribution 记录列表
+	distributions := make([]*model.Distribution, 0, len(req.Keys))
+	for _, key := range req.Keys {
+		if key == "" {
+			continue // 跳过空的 key
+		}
+		distributions = append(distributions, &model.Distribution{
+			Key:    key,
+			Holder: req.Holder,
+		})
+	}
+
+	if len(distributions) == 0 {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "没有有效的 key",
+		})
+		return
+	}
+
+	// 批量插入 Distribution 记录
+	if err := h.store.CreateDistributions(distributions); err != nil {
+		h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
+		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "创建分发记录失败: " + err.Error(),
+		})
+		return
+	}
+
+	h.log.Info("distributions created successfully", "holder", req.Holder, "count", len(distributions))
+	c.JSON(http.StatusCreated, model.ImageAdvertiseResponse{
+		Success: true,
+		Message: "镜像分发信息广播成功",
 	})
 }
