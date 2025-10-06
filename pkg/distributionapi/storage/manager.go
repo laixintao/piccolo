@@ -1,0 +1,56 @@
+package storage
+
+import (
+	"fmt"
+
+	"github.com/laixintao/piccolo/pkg/distributionapi/model"
+	"gorm.io/gorm"
+)
+
+type DistributionManagerInterface interface {
+	CreateDistributions(distributions []*model.Distribution) error
+	GetHolderByKey(key string) ([]*model.Distribution, error)
+	Close() error
+}
+
+type DistributionManager struct {
+	db *gorm.DB
+}
+
+func NewDistributionManager(db *gorm.DB) *DistributionManager {
+	return &DistributionManager{
+		db: db,
+	}
+}
+
+func (m *DistributionManager) CreateDistributions(distributions []*model.Distribution) error {
+	if len(distributions) == 0 {
+		return nil
+	}
+
+	m.db.CreateInBatches(distributions, 1000)
+	return nil
+}
+
+func (m *DistributionManager) GetHolderByKey(key string) ([]*model.Distribution, error) {
+	var distributions []*model.Distribution
+
+	if err := m.db.Where("key = ?", key).Find(&distributions).Error; err != nil {
+		return nil, fmt.Errorf("failed to get holders by key %s: %w", key, err)
+	}
+
+	return distributions, nil
+}
+
+func (m *DistributionManager) Close() error {
+	sqlDB, err := m.db.DB()
+	if err != nil {
+		return fmt.Errorf("failed to get database instance: %w", err)
+	}
+
+	if err := sqlDB.Close(); err != nil {
+		return fmt.Errorf("failed to close database: %w", err)
+	}
+
+	return nil
+}
