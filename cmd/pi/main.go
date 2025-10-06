@@ -147,6 +147,7 @@ func startRegistryServer(ctx context.Context,
 	if err != nil {
 		return err
 	}
+
 	g.Go(func() error {
 		if err := regSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return err

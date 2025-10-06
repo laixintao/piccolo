@@ -35,7 +35,6 @@ func main() {
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init, Piccolo started")
 
-	// 配置数据库连接
 	dbConfig := &storage.DatabaseConfig{
 		Host:     args.DBHost,
 		Port:     args.DBPort,
@@ -49,7 +48,6 @@ func main() {
 		MaxOpenConns: 100,
 	}
 
-	// 初始化MySQL连接
 	db, err := storage.InitMySQL(dbConfig)
 	if err != nil {
 		log.Error(err, "failed to connect to MySQL database")
