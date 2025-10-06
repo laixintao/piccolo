@@ -5,6 +5,7 @@ import (
 
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 )
 
 type DistributionManagerInterface interface {
@@ -28,7 +29,7 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 		return nil
 	}
 
-	m.db.CreateInBatches(distributions, 1000)
+	m.db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(distributions, 1000)
 	return nil
 }
 

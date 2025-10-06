@@ -83,3 +83,10 @@ func InitMySQL(config *DatabaseConfig) (*gorm.DB, error) {
 
 	return db, nil
 }
+
+func AutoMigrate(db *gorm.DB, models ...interface{}) error {
+	if err := db.AutoMigrate(models...); err != nil {
+		return fmt.Errorf("failed to auto migrate database: %w", err)
+	}
+	return nil
+}

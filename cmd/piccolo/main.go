@@ -9,6 +9,7 @@ import (
 	"github.com/alexflint/go-arg"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
+	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
 	distributionHandler "github.com/laixintao/piccolo/pkg/distributionapi/handler"
 )
@@ -55,6 +56,13 @@ func main() {
 	}
 
 	log.Info("MySQL database connected", "host", args.DBHost, "database", args.DBName)
+
+	if err := storage.AutoMigrate(db, &model.Distribution{}); err != nil {
+		log.Error(err, "failed to run database migration")
+		os.Exit(1)
+	}
+
+	log.Info("database migration completed successfully")
 
 	distributionManager := storage.NewDistributionManager(db)
 	distributionHandler := distributionHandler.NewDistributionHandler(distributionManager, log)
