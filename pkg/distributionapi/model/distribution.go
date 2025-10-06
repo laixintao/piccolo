@@ -25,3 +25,14 @@ type ImageAdvertiseResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
+
+type FindKeyRequest struct {
+	Key   string `form:"key" binding:"required"`
+	Count int    `form:"count"`
+}
+
+type FindKeyResponse struct {
+	Key     string   `json:"key"`
+	Holders []string `json:"holders"`
+	Total   int      `json:"total"`
+}

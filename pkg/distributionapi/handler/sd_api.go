@@ -76,3 +76,48 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		Message: "Distribution created!",
 	})
 }
+
+// FindKey finds holders for a key
+// GET /api/v1/distribution/findkey?key=xxx&count=10
+func (h *DistributionHandler) FindKey(c *gin.Context) {
+	var req model.FindKeyRequest
+	if err := c.ShouldBindQuery(&req); err != nil {
+		h.log.Error(err, "failed to bind query parameters")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "Wrong request format: " + err.Error(),
+		})
+		return
+	}
+
+	if req.Key == "" {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"error": "key is empty!",
+		})
+		return
+	}
+
+	// Get limited distributions if count is specified
+	var distributions []*model.Distribution
+	var limit int
+	if req.Count > 0 {
+		limit = req.Count
+	}
+	distributions, err := h.m.GetHolderByKey(req.Key, limit)
+	if err != nil {
+		h.log.Error(err, "failed to get holders by key with limit", "key", req.Key, "count", req.Count)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": "Error when finding holders: " + err.Error(),
+		})
+		return
+	}
+	holders := make([]string, 0, len(distributions))
+	for _, dist := range distributions {
+		holders = append(holders, dist.Holder)
+	}
+
+	h.log.Info("found holders for key", "key", req.Key, "returned", len(holders))
+	c.JSON(http.StatusOK, model.FindKeyResponse{
+		Key:     req.Key,
+		Holders: holders,
+	})
+}

@@ -58,7 +58,7 @@ func InitMySQL(config *DatabaseConfig) (*gorm.DB, error) {
 	dsn := config.BuildDSN()
 
 	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
-		Logger: logger.Default.LogMode(config.LogLevel),
+		Logger: logger.Default.LogMode(logger.Info),
 		NowFunc: func() time.Time {
 			return time.Now().Local()
 		},

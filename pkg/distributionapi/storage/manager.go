@@ -10,7 +10,7 @@ import (
 
 type DistributionManagerInterface interface {
 	CreateDistributions(distributions []*model.Distribution) error
-	GetHolderByKey(key string) ([]*model.Distribution, error)
+	GetHolderByKey(key string, limit int) ([]*model.Distribution, error)
 	Close() error
 }
 
@@ -33,10 +33,15 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	return nil
 }
 
-func (m *DistributionManager) GetHolderByKey(key string) ([]*model.Distribution, error) {
+func (m *DistributionManager) GetHolderByKey(key string, limit int) ([]*model.Distribution, error) {
 	var distributions []*model.Distribution
 
-	if err := m.db.Where("key = ?", key).Find(&distributions).Error; err != nil {
+	query := m.db.Where("`key` = ?", key)
+	if limit > 0 {
+		query = query.Limit(limit)
+	}
+
+	if err := query.Find(&distributions).Error; err != nil {
 		return nil, fmt.Errorf("failed to get holders by key %s: %w", key, err)
 	}
 

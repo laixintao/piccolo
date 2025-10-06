@@ -83,6 +83,7 @@ func main() {
 		images := v1.Group("/distribution")
 		{
 			images.POST("/advertise", distributionHandler.AdvertiseImage)
+			images.GET("/findkey", distributionHandler.FindKey)
 		}
 	}
 
