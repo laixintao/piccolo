@@ -14,7 +14,8 @@ import (
 	"github.com/laixintao/piccolo/pkg/sd"
 )
 
-const FULLUPDATE_WAITTIME = 10 * time.Second
+const FULLUPDATE_WAITTIME = 60 * time.Second
+const MAX_DELETION_EVENTS = 100
 
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, fullRefreshMinutes int64, resolveLatestTag bool) error {
 	log := logr.FromContextOrDiscard(ctx)
@@ -84,7 +85,7 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 		case e := <-events:
 			buffer = append(buffer, e)
 			timer.Reset(FULLUPDATE_WAITTIME)
-			if len(buffer) >= 10 {
+			if len(buffer) >= MAX_DELETION_EVENTS {
 				log.Info("Full updated triggered due to have 10 events", "lenBuffer", len(buffer))
 				flush()
 			}
