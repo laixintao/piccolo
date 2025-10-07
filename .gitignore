@@ -31,3 +31,4 @@ go.work.sum
 # .idea/
 # .vscode/
 debug*.sh
+out_targets
