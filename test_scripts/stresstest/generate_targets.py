@@ -105,12 +105,7 @@ def generate(outdir, num_advertise_targets):
     num_findkey_targets = num_advertise_targets * 10
     num_sync_targets = max(1, num_findkey_targets // 20)  # sync 是 findkey 的 1/20
     
-    # 模拟突发 QPS：将 sync 请求集中在几个时间段内
-    burst_periods = 3
-    sync_per_burst = num_sync_targets // burst_periods
-    remaining_sync = num_sync_targets % burst_periods
-    
-    # 创建请求序列：先随机混合，然后调整 sync 请求的位置
+    # 创建所有请求的列表，用于混合生成
     all_requests = []
     
     # 添加所有请求类型
@@ -121,48 +116,16 @@ def generate(outdir, num_advertise_targets):
     for i in range(num_sync_targets):
         all_requests.append(('sync', i))
     
-    # 随机打乱
+    # 随机打乱所有请求
     random.shuffle(all_requests)
-    
-    # 重新组织 sync 请求，让它们在突发时间段内集中
-    sync_requests = [(req_type, req_idx) for req_type, req_idx in all_requests if req_type == 'sync']
-    other_requests = [(req_type, req_idx) for req_type, req_idx in all_requests if req_type != 'sync']
-    
-    # 将其他请求分成几段，在每段之间插入 sync 突发
-    segment_size = len(other_requests) // burst_periods
-    mixed_requests = []
-    
-    sync_idx = 0
-    for burst_idx in range(burst_periods):
-        # 添加一段其他请求
-        start_idx = burst_idx * segment_size
-        if burst_idx == burst_periods - 1:  # 最后一段包含所有剩余请求
-            end_idx = len(other_requests)
-        else:
-            end_idx = start_idx + segment_size
-        
-        mixed_requests.extend(other_requests[start_idx:end_idx])
-        
-        # 添加这个突发时间段的 sync 请求
-        burst_size = sync_per_burst
-        if burst_idx < remaining_sync:
-            burst_size += 1
-        
-        for i in range(burst_size):
-            if sync_idx < len(sync_requests):
-                mixed_requests.append(sync_requests[sync_idx])
-                sync_idx += 1
 
     with open(targets_path, "w", encoding="utf-8") as tf:
         tf.write("# generated http-format targets\n")
-        tf.write("# 包含混合的 advertise、findkey 和 sync 请求\n")
-        tf.write("# sync 请求会模拟突发高 QPS 情况\n\n")
+        tf.write("# 包含混合的 advertise、findkey 和 sync 请求\n\n")
         
-        sync_count = 0
-        current_burst = 0
-        total_requests = len(mixed_requests)
+        total_requests = len(all_requests)
         
-        for i, (req_type, req_idx) in enumerate(mixed_requests):
+        for i, (req_type, req_idx) in enumerate(all_requests):
             if req_type == 'advertise':
                 uid = uuid.uuid4().hex[:8]
                 body_fname = f"advertise-{uid}.json"
@@ -200,11 +163,6 @@ def generate(outdir, num_advertise_targets):
                     print("*", end="", flush=True)
                 
             elif req_type == 'sync':
-                # 检查是否需要开始新的突发时间段
-                if sync_count == 0:
-                    current_burst += 1
-                    tf.write(f"\n# 突发时间段 {current_burst}\n")
-                
                 uid = uuid.uuid4().hex[:8]
                 body_fname = f"sync-{uid}.json"
                 body_relpath = os.path.join("bodies", body_fname)
@@ -218,23 +176,14 @@ def generate(outdir, num_advertise_targets):
                 tf.write(f"{SYNC_METHOD} {SYNC_URL}\n")
                 tf.write(f"Content-Type: {CONTENT_TYPE}\n")
                 tf.write(f"@{body_relpath}\n\n")
-                print("#", end="", flush=True)
-                sync_count += 1
-                
-                # 检查突发时间段是否结束
-                expected_burst_size = sync_per_burst
-                if current_burst <= remaining_sync:
-                    expected_burst_size += 1
-                
-                if sync_count >= expected_burst_size:
-                    tf.write(f"# 突发时间段 {current_burst} 结束\n\n")
-                    sync_count = 0
+                if (i + 1) % 100 == 0:
+                    print("#", end="", flush=True)
 
     print()
     print(f"✅ 生成完成：")
     print(f"   - {num_advertise_targets} 个 advertise 请求")
     print(f"   - {num_findkey_targets} 个 findkey 请求")
-    print(f"   - {num_sync_targets} 个 sync 请求（分布在 {burst_periods} 个突发时间段）")
+    print(f"   - {num_sync_targets} 个 sync 请求")
     print(f"   - 总共 {len(advertised_keys)} 个已 advertise 的 keys")
     print(f"   - 输出目录：{outdir}")
 
