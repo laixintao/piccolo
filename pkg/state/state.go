@@ -14,6 +14,8 @@ import (
 	"github.com/laixintao/piccolo/pkg/sd"
 )
 
+const FULLUPDATE_WAITTIME = 10 * time.Second
+
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, fullRefreshMinutes int64, resolveLatestTag bool) error {
 	log := logr.FromContextOrDiscard(ctx)
 	eventCh, errCh, err := ociClient.Subscribe(ctx)
@@ -26,16 +28,18 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ful
 	expirationTicker := time.NewTicker(time.Duration(fullRefreshMinutes) * time.Minute)
 	defer expirationTicker.Stop()
 	tickerCh := channel.Merge(immediateCh, expirationTicker.C)
+
+	fullUpdatesCh := make(chan string, 10)
+	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
 		case <-tickerCh:
-			log.Info("running scheduled image state update")
-			if err := all(ctx, ociClient, sd, resolveLatestTag); err != nil {
-				log.Error(err, "received errors when updating all images")
-				continue
-			}
+			log.Info("By Ticker: Running scheduled image state update")
+			fullUpdatesCh <- "ticker"
+
 		case event, ok := <-eventCh:
 			if !ok {
 				return errors.New("image event channel closed")
@@ -44,9 +48,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ful
 
 			// Delete event will trigger full upates...
 			if event.Type == oci.DeleteEvent {
-				if err := all(ctx, ociClient, sd, resolveLatestTag); err != nil {
-					log.Error(err, "received errors when updating all images")
-				}
+				fullUpdatesCh <- "deleteEvent"
 				continue
 			}
 
@@ -63,10 +65,40 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ful
 	}
 }
 
+func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) {
+	var buffer []string
+	log := logr.FromContextOrDiscard(ctx)
+	timer := time.NewTimer(FULLUPDATE_WAITTIME)
+	timer.Stop()
+
+	flush := func() {
+		if len(buffer) > 0 {
+			all(ctx, ociClient, sd, resolveLatestTag)
+			buffer = nil
+			timer.Stop()
+		}
+	}
+
+	for {
+		select {
+		case e := <-events:
+			buffer = append(buffer, e)
+			timer.Reset(FULLUPDATE_WAITTIME)
+			if len(buffer) >= 10 {
+				log.Info("Full updated triggered due to have 10 events", "lenBuffer", len(buffer))
+				flush()
+			}
+		case <-timer.C:
+			log.Info("Full updated triggered due to 10 seoncds passed since last event", "lenBuffer", len(buffer))
+			flush()
+		}
+	}
+}
+
 func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) error {
 	log := logr.FromContextOrDiscard(ctx).V(4)
 	imgs, err := ociClient.ListImages(ctx)
-	log.Info("list images: ", "imgs", imgs)
+	log.Info("Exeucte a full updates, list images: ", "imgs", imgs)
 	if err != nil {
 		log.Error(err, "ociClient.ListImages returns error")
 		return err

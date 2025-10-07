@@ -61,22 +61,6 @@ func main() {
 		os.Exit(1)
 	}
 	log.Info("containerd sdk init")
-	img, err := ociClient.ListImages(ctx)
-	if err != nil {
-		log.Error(err, "Get image error")
-		os.Exit(1)
-	}
-	log.Info("list image")
-	log.Info("Image", "image", img)
-
-	for _, item := range img {
-		log.Info("Get image details", "Name", item.Name,
-			"Registry", item.Registry,
-			"Repository", item.Repository,
-			"Tag", item.Tag,
-			"Digest", item.Digest,
-		)
-	}
 
 	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr)
 	if err != nil {
