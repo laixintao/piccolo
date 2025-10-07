@@ -66,6 +66,8 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ful
 	}
 }
 
+// if full updates triggered (less than) MAX_DELETION_EVENTS in FULLUPDATE_WAITTIME
+// the full update will only be called once.
 func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) {
 	var buffer []string
 	log := logr.FromContextOrDiscard(ctx)
@@ -84,7 +86,9 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 		select {
 		case e := <-events:
 			buffer = append(buffer, e)
-			timer.Reset(FULLUPDATE_WAITTIME)
+			if len(buffer) == 1 {
+				timer.Reset(FULLUPDATE_WAITTIME)
+			}
 			if len(buffer) >= MAX_DELETION_EVENTS {
 				log.Info("Full updated triggered due to have 10 events", "lenBuffer", len(buffer))
 				flush()
