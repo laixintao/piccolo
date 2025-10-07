@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path"
+	"strconv"
 
 	"time"
 
@@ -86,7 +87,7 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 	if err != nil {
 		log.Error(err, "Advertise error", "response", response)
 		return err
-	} 
+	}
 	log.Info("Advertise done", "response", response)
 
 	return nil
@@ -94,8 +95,45 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 
 func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error) {
 	p.log.Info("Resolve key", "key", key, "count", count)
-	addrs := []netip.AddrPort{
-		netip.MustParseAddrPort("192.168.0.1:8080"),
+	log := logr.FromContextOrDiscard(ctx)
+	u := p.piccoloAddress
+	u.Path = path.Join(u.Path, "api", "v1", "distribution", "findkey")
+	params :=url.Values{}
+	params.Add("key", key)
+	params.Add("count", strconv.Itoa(count))
+	u.RawQuery = params.Encode()
+
+	response, err := httputils.DoRequestWithRetry(ctx,
+		"GET",
+		u.String(),
+		nil,
+		map[string]string{
+			"Accept":       "application/json",
+		},
+		5*time.Second,
+		1*time.Second,
+		3*time.Second,
+		p.httpClient,
+	)
+	if err != nil {
+		log.Error(err, "Advertise error", "response", response)
+		return nil, err
 	}
-	return addrs, nil
+	log.Info("Advertise done", "response", response)
+
+	var findkeyResp model.FindKeyResponse
+	if err := json.NewDecoder(response).Decode(&findkeyResp); err != nil {
+		return nil, err
+	}
+	var addrPorts []netip.AddrPort
+	for _, h := range findkeyResp.Holders {
+		ap, err := netip.ParseAddrPort(h)
+		if err != nil {
+			log.Error(err, "Can not convert to net.AddrPort", "host", h)
+			continue
+		}
+		addrPorts = append(addrPorts, ap)
+	}
+
+	return addrPorts, nil
 }
