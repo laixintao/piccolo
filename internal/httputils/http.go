@@ -17,7 +17,7 @@ func DoRequestWithRetry(
 	singleTimeout time.Duration,
 	initialBackoff, maxBackoff time.Duration,
 	client *http.Client,
-) ([]byte, error) {
+) (*http.Response, error) {
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -58,20 +58,16 @@ func DoRequestWithRetry(
 			lastErr = err
 			fmt.Printf("[attempt %d] request error: %v\n", attempt, err)
 		} else {
-			defer resp.Body.Close()
-
 			if resp.StatusCode >= 500 {
+				resp.Body.Close()
 				lastErr = fmt.Errorf("server error: %s", resp.Status)
 				fmt.Printf("[attempt %d] server error: %s\n", attempt, resp.Status)
 			} else if resp.StatusCode >= 400 {
 				respBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
 				return nil, fmt.Errorf("client error: %s, body: %s", resp.Status, string(respBody))
 			} else {
-				respBody, err := io.ReadAll(resp.Body)
-				if err != nil {
-					return nil, fmt.Errorf("read body failed: %w", err)
-				}
-				return respBody, nil
+				return resp, nil
 			}
 		}
 

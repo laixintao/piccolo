@@ -128,7 +128,7 @@ func (r *Registry) handle(rw mux.ResponseWriter, req *http.Request) {
 			r.log.Info("", kvs...)
 			return
 		}
-		r.log.Error(rw.Error(), "", kvs...)
+		r.log.Error(rw.Error(), "reuqest-to-registry", kvs...)
 	}()
 	metrics.HttpRequestsInflight.WithLabelValues(path).Add(1)
 
@@ -209,13 +209,15 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 		default:
 			err := r.try(peer, rw, req)
 			if err != nil {
-				r.log.Info("request failed when try peer", "peer", peer)
+				r.log.Error(err, "request failed when try peer", "peer", peer)
 			} else {
-				break
+				r.log.Info("Mirror successfully handled")
+				return
 			}
 		}
 	}
 	r.log.Info("WARN: all peers failed or timeout reached")
+	rw.WriteHeader(http.StatusNotFound)
 }
 
 func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Request) error {

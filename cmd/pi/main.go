@@ -8,21 +8,25 @@ import (
 	"context"
 	"log/slog"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"os"
 
 	"github.com/alexflint/go-arg"
 	"github.com/go-logr/logr"
+	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/oci"
 	"github.com/laixintao/piccolo/pkg/registry"
 	"github.com/laixintao/piccolo/pkg/sd"
 	"github.com/laixintao/piccolo/pkg/state"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 )
 
 type Arguments struct {
 	RegistryAddr string `arg:"--registry-listen-addr,env:REGISTRY_ADDR,required" help:"address to serve image registry (for local containerd, you can use 127.0.0.1, as long as it can be connected for your containerd)"`
 	PiAddr       string `arg:"--pi-listen-addr,env:PI_ADDR,required" help:"address to serve downloading for other pi agents, other agents will download images from this address"`
+	MetricsAddr                  string        `arg:"--metrics-listen-addr,required,env:METRICS_ADDR" help:"address to serve metrics."`
 
 	ContainerdSock        string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
 	ContainerdNamespace   string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
@@ -81,6 +85,13 @@ func main() {
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
+
+	err = startMetricsServer(ctx, args.MetricsAddr, g)
+	if err != nil {
+		log.Error(err, "Error when start Pi Server")
+		os.Exit(1)
+	}
+	log.Info("Metrics server started", "address", args.PiAddr)
 
 	// Pi Server
 	err = startPiServer(ctx, args.MaxUploadConnections, ociClient, piccoloSD, log, args.PiAddr, g)
@@ -161,5 +172,41 @@ func startRegistryServer(ctx context.Context,
 		return regSrv.Shutdown(shutdownCtx)
 	})
 
+	return nil
+}
+
+func startMetricsServer(ctx context.Context,
+	metricsAddr string,
+	g *errgroup.Group,
+) error {
+	metrics.Register()
+	mux := http.NewServeMux()
+	mux.Handle("/metrics", promhttp.HandlerFor(metrics.DefaultGatherer, promhttp.HandlerOpts{}))
+	mux.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
+	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+	mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+	mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+	mux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+	mux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+	mux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+	mux.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+	mux.Handle("/debug/pprof/block", pprof.Handler("block"))
+	mux.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	metricsSrv := &http.Server{
+		Addr:    metricsAddr,
+		Handler: mux,
+	}
+	g.Go(func() error {
+		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return err
+		}
+		return nil
+	})
+	g.Go(func() error {
+		<-ctx.Done()
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		return metricsSrv.Shutdown(shutdownCtx)
+	})
 	return nil
 }

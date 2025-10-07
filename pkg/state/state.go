@@ -78,25 +78,38 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 	metrics.AdvertisedImageDigests.Reset()
 	errs := []error{}
 	targets := map[string]interface{}{}
+	keys := map[string]string{}
 	for _, img := range imgs {
 		_, skipDigests := targets[img.Digest.String()]
-		// Handle the list re-sync as update events; this will also prevent the
-		// update function from setting metrics values.
-		event := oci.ImageEvent{Image: img, Type: oci.UpdateEvent}
-		log.Info("sync image event", "image", event.Image.String(), "type", event.Type)
-		keyTotal, err := update(ctx, ociClient, sd, event, skipDigests, resolveLatestTag)
-		if err != nil {
-			errs = append(errs, err)
-			continue
+
+		if !(!resolveLatestTag && img.IsLatestTag()) {
+			if tagName, ok := img.TagName(); ok {
+				keys[tagName] = img.Registry
+				metrics.AdvertisedImageDigests.WithLabelValues(img.Registry).Add(1)
+			}
 		}
-		targets[img.Digest.String()] = nil
-		metrics.AdvertisedKeys.WithLabelValues(img.Registry).Add(float64(keyTotal))
+
+		if !skipDigests {
+			dgsts, err := oci.WalkImage(ctx, ociClient, img)
+			if err != nil {
+				errs = append(errs, err)
+			}
+			for _, d := range dgsts {
+				keys[d] = img.Registry
+			}
+		}
+		targets[img.Digest.String()] = img.Registry
 		metrics.AdvertisedImages.WithLabelValues(img.Registry).Add(1)
-		if img.Tag == "" {
-			metrics.AdvertisedImageDigests.WithLabelValues(event.Image.Registry).Add(1)
-		} else {
-			metrics.AdvertisedImageTags.WithLabelValues(event.Image.Registry).Add(1)
-		}
+	}
+	var keyList []string
+	for key, reg := range keys {
+		keyList = append(keyList, key)
+		metrics.AdvertisedKeys.WithLabelValues(reg).Add(1)
+	}
+	log.Info("Sync all images", "totalKeys", len(keyList))
+	err = sd.Sync(ctx, keyList)
+	if err != nil {
+		return err
 	}
 	return errors.Join(errs...)
 }
