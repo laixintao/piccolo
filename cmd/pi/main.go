@@ -74,7 +74,7 @@ func main() {
 		)
 	}
 
-	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log)
+	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr)
 	if err != nil {
 		log.Error(err, "NewPiccoloServiceDiscover error")
 		os.Exit(1)
