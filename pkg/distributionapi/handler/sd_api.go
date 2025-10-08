@@ -50,6 +50,7 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		distributions = append(distributions, &model.Distribution{
 			Key:    key,
 			Holder: req.Holder,
+			Group:  req.Group,
 		})
 	}
 
@@ -78,7 +79,7 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 }
 
 // FindKey finds holders for a key
-// GET /api/v1/distribution/findkey?key=xxx&count=10
+// GET /api/v1/distribution/findkey?key=xxx&count=10&group=xxx
 func (h *DistributionHandler) FindKey(c *gin.Context) {
 	var req model.FindKeyRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
@@ -102,7 +103,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 	if req.Count > 0 {
 		limit = req.Count
 	}
-	distributions, err := h.m.GetHolderByKey(req.Key, limit)
+	distributions, err := h.m.GetHolderByKey(req.Group, req.Key, limit)
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key with limit", "key", req.Key, "count", req.Count)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -115,10 +116,11 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		holders = append(holders, dist.Holder)
 	}
 
-	h.log.Info("found holders for key", "key", req.Key, "returned", len(holders))
+	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "returned", len(holders))
 	c.JSON(http.StatusOK, model.FindKeyResponse{
 		Key:     req.Key,
 		Holders: holders,
+		Group:   req.Group,
 	})
 }
 
@@ -151,6 +153,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		distributions = append(distributions, &model.Distribution{
 			Key:    key,
 			Holder: req.Holder,
+			Group:  req.Group,
 		})
 	}
 

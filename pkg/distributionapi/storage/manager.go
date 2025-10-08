@@ -31,7 +31,7 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 		return nil
 	}
 
-	m.db.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(distributions, MaxBatch)
+	m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch)
 	return nil
 }
 
@@ -53,10 +53,10 @@ func (m *DistributionManager) SyncDistributions(holder string, distributions []*
 	})
 }
 
-func (m *DistributionManager) GetHolderByKey(key string, limit int) ([]*model.Distribution, error) {
+func (m *DistributionManager) GetHolderByKey(group string, key string, limit int) ([]*model.Distribution, error) {
 	var distributions []*model.Distribution
 
-	query := m.db.Where("`key` = ?", key)
+	query := m.db.Where("`key` = ? and `group` = ?", key, group)
 	if limit > 0 {
 		query = query.Limit(limit)
 	}

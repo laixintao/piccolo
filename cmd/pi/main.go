@@ -26,7 +26,7 @@ import (
 type Arguments struct {
 	RegistryAddr string `arg:"--registry-listen-addr,env:REGISTRY_ADDR,required" help:"address to serve image registry (for local containerd, you can use 127.0.0.1, as long as it can be connected for your containerd)"`
 	PiAddr       string `arg:"--pi-listen-addr,env:PI_ADDR,required" help:"address to serve downloading for other pi agents, other agents will download images from this address"`
-	MetricsAddr                  string        `arg:"--metrics-listen-addr,required,env:METRICS_ADDR" help:"address to serve metrics."`
+	MetricsAddr  string `arg:"--metrics-listen-addr,required,env:METRICS_ADDR" help:"address to serve metrics."`
 
 	ContainerdSock        string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
 	ContainerdNamespace   string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
@@ -39,6 +39,7 @@ type Arguments struct {
 	MaxUploadConnections  int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
 	MirrorResolveTimeout  time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"20ms" help:"Max duration spent finding a mirror."`
 	MirrorResolveRetries  int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
+	Group                 string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
 }
 
 func main() {
@@ -62,7 +63,7 @@ func main() {
 	}
 	log.Info("containerd sdk init")
 
-	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr)
+	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group)
 	if err != nil {
 		log.Error(err, "NewPiccoloServiceDiscover error")
 		os.Exit(1)
@@ -78,7 +79,7 @@ func main() {
 	log.Info("Metrics server started", "address", args.PiAddr)
 
 	// Pi Server
-	err = startPiServer(ctx, args.MaxUploadConnections, ociClient, piccoloSD, log, args.PiAddr, g)
+	err = startPiServer(ctx, args.Group, args.MaxUploadConnections, ociClient, piccoloSD, log, args.PiAddr, g)
 	if err != nil {
 		log.Error(err, "Error when start Pi Server")
 		os.Exit(1)
@@ -110,12 +111,12 @@ func main() {
 	}
 }
 
-func startPiServer(ctx context.Context, maxConnection int,
+func startPiServer(ctx context.Context, group string, maxConnection int,
 	ociClient oci.Client, sd sd.ServiceDiscover, log logr.Logger, piAddr string, g *errgroup.Group) error {
 	piServerOptions := []registry.PiServerOption{
 		registry.WithMaxUploadConnection(maxConnection),
 	}
-	reg := registry.NewPiServer(ociClient, log, sd, piServerOptions...)
+	reg := registry.NewPiServer(ociClient, group, log, sd, piServerOptions...)
 	regSrv, err := reg.Server(piAddr)
 	if err != nil {
 		return err

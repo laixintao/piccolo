@@ -26,10 +26,10 @@ type PiServer struct {
 	maxUploadConnections int
 	semaphore            chan struct{}
 	sd                   sd.ServiceDiscover
+	group                string
 }
 
 type PiServerOption func(*PiServer)
-
 
 func WithMaxUploadConnection(maxConnection int) PiServerOption {
 	return func(r *PiServer) {
@@ -38,16 +38,17 @@ func WithMaxUploadConnection(maxConnection int) PiServerOption {
 	}
 }
 
-func NewPiServer(ociClient oci.Client, log logr.Logger, sd sd.ServiceDiscover, opts ...PiServerOption) *PiServer {
+func NewPiServer(ociClient oci.Client, group string, log logr.Logger, sd sd.ServiceDiscover, opts ...PiServerOption) *PiServer {
 	r := &PiServer{
 		ociClient:            ociClient,
-		log: log,
-		sd: sd,
+		log:                  log,
+		sd:                   sd,
 		resolveRetries:       3,
 		resolveTimeout:       20 * time.Millisecond,
 		resolveLatestTag:     true,
 		maxUploadConnections: 5,
 		semaphore:            make(chan struct{}, 5),
+		group:                group,
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -114,7 +115,6 @@ func (r *PiServer) handle(rw mux.ResponseWriter, req *http.Request) {
 	}
 	rw.WriteHeader(http.StatusNotFound)
 }
-
 
 func (r *PiServer) registryHandler(rw mux.ResponseWriter, req *http.Request) string {
 	// Quickly return 200 for /v2 to indicate that registry supports v2.
@@ -207,7 +207,6 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 
 	http.ServeContent(rw, req, "", time.Time{}, rc)
 }
-
 
 func getClientIP(req *http.Request) string {
 	forwardedFor := req.Header.Get("X-Forwarded-For")

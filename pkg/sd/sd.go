@@ -30,9 +30,10 @@ type PiccoloServiceDiscover struct {
 	log            logr.Logger
 	httpClient     *http.Client
 	piAddr         string
+	group          string
 }
 
-func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr string) (*PiccoloServiceDiscover, error) {
+func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr string, group string) (*PiccoloServiceDiscover, error) {
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
@@ -53,6 +54,7 @@ func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr s
 		log:            log,
 		httpClient:     httpClient,
 		piAddr:         piAddr,
+		group:          group,
 	}, nil
 }
 
@@ -68,6 +70,7 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 	request := model.ImageAdvertiseRequest{
 		Holder: p.piAddr,
 		Keys:   keys,
+		Group:  p.group,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -108,6 +111,7 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	u := p.piccoloAddress
 	u.Path = path.Join(u.Path, "api", "v1", "distribution", "findkey")
 	params := url.Values{}
+	params.Add("group", p.group)
 	params.Add("key", key)
 	params.Add("count", strconv.Itoa(count))
 	u.RawQuery = params.Encode()
@@ -158,6 +162,7 @@ func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
 	request := model.ImageAdvertiseRequest{
 		Holder: p.piAddr,
 		Keys:   keys,
+		Group:  p.group,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
