@@ -6,7 +6,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -o pi cmd/pi/main.go
 
 FROM alpine:latest
-RUN apk --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates
 WORKDIR /root/
 COPY --from=builder /app/pi .
 CMD ["./pi"]
