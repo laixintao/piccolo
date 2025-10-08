@@ -11,12 +11,12 @@ gen_http_targets.py
 """
 
 import argparse
+import hashlib
 import json
 import os
 import random
-import uuid
-import hashlib
 import string
+import uuid
 
 ADVERTISE_URL = "http://127.0.0.1:7789/api/v1/distribution/advertise"
 FINDKEY_URL = "http://127.0.0.1:7789/api/v1/distribution/findkey"
@@ -43,15 +43,6 @@ def random_sha256():
     digest = hashlib.sha256(random_bytes).hexdigest()
     return f"sha256:{digest}"
 
-
-def random_sync_key(min_length=100, max_length=10000):
-    """生成随机 sync key，长度在指定范围内"""
-    length = random.randint(min_length, max_length)
-    # 使用字母、数字和常见符号生成随机字符串
-    chars = string.ascii_letters + string.digits + "._-"
-    return ''.join(random.choice(chars) for _ in range(length))
-
-
 def make_sync_body(existing_keys=None):
     """生成 sync 请求的 body"""
     holder_ip = random_ipv4()
@@ -63,7 +54,7 @@ def make_sync_body(existing_keys=None):
         if random.random() < 0.3 and existing_keys:
             key = random.choice(existing_keys)
         else:
-            key = random_sync_key()
+            key = random_sha256()
         keys.append(key)
     
     return {
@@ -125,6 +116,9 @@ def generate(outdir, num_advertise_targets):
         
         total_requests = len(all_requests)
         
+        # 批量处理，减少文件 I/O
+        body_files_to_write = []
+        
         for i, (req_type, req_idx) in enumerate(all_requests):
             if req_type == 'advertise':
                 uid = uuid.uuid4().hex[:8]
@@ -136,8 +130,8 @@ def generate(outdir, num_advertise_targets):
                 # 收集 keys 用于后续的 findkey 和 sync 请求
                 advertised_keys.extend(body_obj["keys"])
                 
-                with open(body_disk_path, "w", encoding="utf-8") as bf:
-                    json.dump(body_obj, bf, indent=4, ensure_ascii=False)
+                # 收集要写入的文件
+                body_files_to_write.append((body_disk_path, body_obj))
 
                 tf.write(f"{ADVERTISE_METHOD} {ADVERTISE_URL}\n")
                 tf.write(f"Content-Type: {CONTENT_TYPE}\n")
@@ -170,14 +164,21 @@ def generate(outdir, num_advertise_targets):
 
                 body_obj = make_sync_body(advertised_keys)
                 
-                with open(body_disk_path, "w", encoding="utf-8") as bf:
-                    json.dump(body_obj, bf, indent=4, ensure_ascii=False)
+                # 收集要写入的文件
+                body_files_to_write.append((body_disk_path, body_obj))
 
                 tf.write(f"{SYNC_METHOD} {SYNC_URL}\n")
                 tf.write(f"Content-Type: {CONTENT_TYPE}\n")
                 tf.write(f"@{body_relpath}\n\n")
                 if (i + 1) % 100 == 0:
                     print("#", end="", flush=True)
+        
+        # 批量写入所有 JSON 文件
+        print("\n正在写入 JSON 文件...", end="", flush=True)
+        for body_disk_path, body_obj in body_files_to_write:
+            with open(body_disk_path, "w", encoding="utf-8") as bf:
+                json.dump(body_obj, bf, separators=(',', ':'), ensure_ascii=False)
+        print(" 完成!")
 
     print()
     print(f"✅ 生成完成：")

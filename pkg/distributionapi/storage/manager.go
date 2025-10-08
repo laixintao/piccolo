@@ -44,7 +44,8 @@ func (m *DistributionManager) SyncDistributions(holder string, distributions []*
 			return err
 		}
 
-		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
+		// only MySQL ≥ 8.0.19
+		if err := tx.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
 			return err
 		}
 
