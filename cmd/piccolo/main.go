@@ -9,9 +9,11 @@ import (
 	"github.com/alexflint/go-arg"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
+	distributionHandler "github.com/laixintao/piccolo/pkg/distributionapi/handler"
+	"github.com/laixintao/piccolo/pkg/distributionapi/middleware"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
-	distributionHandler "github.com/laixintao/piccolo/pkg/distributionapi/handler"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 type Arguments struct {
@@ -71,6 +73,10 @@ func main() {
 	log.Info("image store initialized")
 
 	r := gin.Default()
+
+	r.Use(middleware.HandlerMetricsMiddleware())
+	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
+
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
