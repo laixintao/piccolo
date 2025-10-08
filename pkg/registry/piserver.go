@@ -10,23 +10,29 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/time/rate"
 
 	"github.com/laixintao/piccolo/internal/mux"
+	"github.com/laixintao/piccolo/internal/ratelimit"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/oci"
 	"github.com/laixintao/piccolo/pkg/sd"
 )
 
+const ONE_G_BPS = 1 * 1024 * 1024 * 1024
+
 type PiServer struct {
-	log                  logr.Logger
-	ociClient            oci.Client
-	resolveRetries       int
-	resolveTimeout       time.Duration
-	resolveLatestTag     bool
-	maxUploadConnections int
-	semaphore            chan struct{}
-	sd                   sd.ServiceDiscover
-	group                string
+	log                     logr.Logger
+	ociClient               oci.Client
+	resolveRetries          int
+	resolveTimeout          time.Duration
+	resolveLatestTag        bool
+	maxUploadConnections    int
+	semaphore               chan struct{}
+	sd                      sd.ServiceDiscover
+	group                   string
+	maxUploadBlobSpeedBytes float64
+	limiter                 *rate.Limiter
 }
 
 type PiServerOption func(*PiServer)
@@ -35,6 +41,13 @@ func WithMaxUploadConnection(maxConnection int) PiServerOption {
 	return func(r *PiServer) {
 		r.maxUploadConnections = maxConnection
 		r.semaphore = make(chan struct{}, maxConnection)
+	}
+}
+
+func WithMaxUploadBlobSpeedBytes(speed float64) PiServerOption {
+	return func(r *PiServer) {
+		r.maxUploadBlobSpeedBytes = speed
+		r.limiter = rate.NewLimiter(rate.Limit(speed), int(speed)) // burst also set to `speed`
 	}
 }
 
@@ -49,6 +62,7 @@ func NewPiServer(ociClient oci.Client, group string, log logr.Logger, sd sd.Serv
 		maxUploadConnections: 5,
 		semaphore:            make(chan struct{}, 5),
 		group:                group,
+		limiter:              rate.NewLimiter(rate.Limit(ONE_G_BPS), int(ONE_G_BPS)),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -205,7 +219,12 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 	}
 	defer rc.Close()
 
-	http.ServeContent(rw, req, "", time.Time{}, rc)
+	limitedRC := &ratelimit.RateLimitedReadSeeker{
+		Rs:      rc,
+		Limiter: r.limiter,
+	}
+
+	http.ServeContent(rw, req, "", time.Time{}, limitedRC)
 }
 
 func getClientIP(req *http.Request) string {

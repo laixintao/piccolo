@@ -28,18 +28,19 @@ type Arguments struct {
 	PiAddr       string `arg:"--pi-listen-addr,env:PI_ADDR,required" help:"address to serve downloading for other pi agents, other agents will download images from this address"`
 	MetricsAddr  string `arg:"--metrics-listen-addr,required,env:METRICS_ADDR" help:"address to serve metrics."`
 
-	ContainerdSock        string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
-	ContainerdNamespace   string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
-	ContainerdContentPath string        `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
-	Registries            []url.URL     `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
-	LogLevel              slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
-	ResolveLatestTag      bool          `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
-	PiccoloAddress        url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
-	FullRefreshMinutes    int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" help:"pi will update all image states to piccolo for every X minutes."`
-	MaxUploadConnections  int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
-	MirrorResolveTimeout  time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"20ms" help:"Max duration spent finding a mirror."`
-	MirrorResolveRetries  int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
-	Group                 string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
+	ContainerdSock              string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
+	ContainerdNamespace         string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
+	ContainerdContentPath       string        `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
+	Registries                  []url.URL     `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
+	LogLevel                    slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
+	ResolveLatestTag            bool          `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
+	PiccoloAddress              url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
+	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" help:"pi will update all image states to piccolo for every X minutes."`
+	MaxUploadConnections        int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
+	MaxUploadBlobBytesPerSecond float64       `arg:"--max-upload-blob-bytes-per-second,env:PI_MAX_UPLOAD_BLOB_BYTES_PER_SECOND" default:"1073741824" help:"Max upload speed limition for upload blobs to other pi nodes."`
+	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"20ms" help:"Max duration spent finding a mirror."`
+	MirrorResolveRetries        int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
+	Group                       string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
 }
 
 func main() {
@@ -79,7 +80,7 @@ func main() {
 	log.Info("Metrics server started", "address", args.PiAddr)
 
 	// Pi Server
-	err = startPiServer(ctx, args.Group, args.MaxUploadConnections, ociClient, piccoloSD, log, args.PiAddr, g)
+	err = startPiServer(ctx, args.Group, args.MaxUploadConnections, args.MaxUploadBlobBytesPerSecond, ociClient, piccoloSD, log, args.PiAddr, g)
 	if err != nil {
 		log.Error(err, "Error when start Pi Server")
 		os.Exit(1)
@@ -112,9 +113,11 @@ func main() {
 }
 
 func startPiServer(ctx context.Context, group string, maxConnection int,
+	maxUploadBlobSpeedBytes float64, 
 	ociClient oci.Client, sd sd.ServiceDiscover, log logr.Logger, piAddr string, g *errgroup.Group) error {
 	piServerOptions := []registry.PiServerOption{
 		registry.WithMaxUploadConnection(maxConnection),
+		registry.WithMaxUploadBlobSpeedBytes(maxUploadBlobSpeedBytes),
 	}
 	reg := registry.NewPiServer(ociClient, group, log, sd, piServerOptions...)
 	regSrv, err := reg.Server(piAddr)

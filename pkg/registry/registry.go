@@ -33,7 +33,6 @@ type Registry struct {
 	resolveRetries       int
 	resolveTimeout       time.Duration
 	resolveLatestTag     bool
-	maxUploadConnections int
 	semaphore            chan struct{}
 }
 
