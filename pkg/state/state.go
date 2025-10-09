@@ -4,18 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/rand"
 	"time"
 
 	"github.com/go-logr/logr"
 
-	"github.com/laixintao/piccolo/internal/channel"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/oci"
 	"github.com/laixintao/piccolo/pkg/sd"
 )
 
-const FULLUPDATE_WAITTIME = 60 * time.Second
-const MAX_DELETION_EVENTS = 100
+const (
+	FULLUPDATE_WAITTIME = 60 * time.Second
+	MAX_DELETION_EVENTS = 100
+	JITTER_PERCENT      = 0.1
+)
+
+func jitterDuration(base time.Duration) time.Duration {
+	factor := 1 + (rand.Float64()*2-1)*JITTER_PERCENT
+	return time.Duration(float64(base) * factor)
+}
 
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, fullRefreshMinutes int64, resolveLatestTag bool) error {
 	log := logr.FromContextOrDiscard(ctx)
@@ -23,21 +31,22 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ful
 	if err != nil {
 		return err
 	}
-	immediateCh := make(chan time.Time, 1)
-	immediateCh <- time.Now()
-	close(immediateCh)
-	expirationTicker := time.NewTicker(time.Duration(fullRefreshMinutes) * time.Minute)
+
+	jitterUpdateDuration := jitterDuration(time.Duration(fullRefreshMinutes) * time.Minute)
+	log.Info("Start periodic updates channel.", "durationMinutes", jitterUpdateDuration.Minutes())
+
+	expirationTicker := time.NewTicker(jitterUpdateDuration)
 	defer expirationTicker.Stop()
-	tickerCh := channel.Merge(immediateCh, expirationTicker.C)
 
 	fullUpdatesCh := make(chan string, 10)
+	fullUpdatesCh <- "pi-start" // trigger full updates when pi agent starts
 	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
 
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-tickerCh:
+		case <-expirationTicker.C:
 			log.Info("By Ticker: Running scheduled image state update")
 			fullUpdatesCh <- "ticker"
 

@@ -39,18 +39,16 @@ func (m *DistributionManager) SyncDistributions(holder string, distributions []*
 	if len(distributions) == 0 {
 		return nil
 	}
-	return m.db.Transaction(func(tx *gorm.DB) error {
-		if err := tx.Where("holder = ?", holder).Delete(&model.Distribution{}).Error; err != nil {
-			return err
-		}
 
-		// only MySQL ≥ 8.0.19
-		if err := tx.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
-			return err
-		}
+	if err := m.db.Where("holder = ?", holder).Delete(&model.Distribution{}).Error; err != nil {
+		return err
+	}
 
-		return nil
-	})
+	if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func (m *DistributionManager) GetHolderByKey(group string, key string, limit int) ([]*model.Distribution, error) {
