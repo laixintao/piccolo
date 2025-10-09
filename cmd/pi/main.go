@@ -23,6 +23,12 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
+var (
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
+)
+
 type Arguments struct {
 	RegistryAddr string `arg:"--registry-listen-addr,env:REGISTRY_ADDR,required" help:"address to serve image registry (for local containerd, you can use 127.0.0.1, as long as it can be connected for your containerd)"`
 	PiAddr       string `arg:"--pi-listen-addr,env:PI_ADDR,required" help:"address to serve downloading for other pi agents, other agents will download images from this address"`
@@ -41,10 +47,18 @@ type Arguments struct {
 	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"20ms" help:"Max duration spent finding a mirror."`
 	MirrorResolveRetries        int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
 	Group                       string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
+	Version                     bool          `arg:"-v,--version" help:"show version"`
 }
 
 func main() {
 	fmt.Println("Hello, Pi!")
+
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-v" {
+			fmt.Printf("Pi Version: %s\nCommit: %s\nBuilt: %s\n", version, commit, date)
+			os.Exit(0)
+		}
+	}
 
 	args := &Arguments{}
 	arg.MustParse(args)
@@ -113,7 +127,7 @@ func main() {
 }
 
 func startPiServer(ctx context.Context, group string, maxConnection int,
-	maxUploadBlobSpeedBytes float64, 
+	maxUploadBlobSpeedBytes float64,
 	ociClient oci.Client, sd sd.ServiceDiscover, log logr.Logger, piAddr string, g *errgroup.Group) error {
 	piServerOptions := []registry.PiServerOption{
 		registry.WithMaxUploadConnection(maxConnection),

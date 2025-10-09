@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"net/http"
 	"os"
 
@@ -16,6 +17,12 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
+var (
+    version = "dev"
+    commit  = "none"
+    date    = "unknown"
+)
+
 type Arguments struct {
 	PiccoloAddress string     `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
 	LogLevel       slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
@@ -24,9 +31,16 @@ type Arguments struct {
 	DBUser         string     `arg:"--db-user,env:DB_USER" default:"root" help:"MySQL database user"`
 	DBPassword     string     `arg:"--db-password,env:DB_PASSWORD" default:"" help:"MySQL database password"`
 	DBName         string     `arg:"--db-name,env:DB_NAME" default:"piccolo" help:"MySQL database name"`
+	Version        bool       `arg:"-v,--version" help:"show version"`
 }
 
 func main() {
+	for _, a := range os.Args[1:] {
+		if a == "--version" || a == "-v" {
+			fmt.Printf("Piccolo Version: %s\nCommit: %s\nBuilt: %s\n", version, commit, date)
+			os.Exit(0)
+		}
+	}
 	args := &Arguments{}
 	arg.MustParse(args)
 
@@ -76,7 +90,6 @@ func main() {
 
 	r.Use(middleware.HandlerMetricsMiddleware())
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
-
 
 	r.GET("/healthz", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{
