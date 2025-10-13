@@ -14,13 +14,14 @@ import (
 	"github.com/laixintao/piccolo/pkg/distributionapi/middleware"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 
 var (
-    version = "dev"
-    commit  = "none"
-    date    = "unknown"
+	version = "dev"
+	commit  = "none"
+	date    = "unknown"
 )
 
 type Arguments struct {
@@ -89,6 +90,8 @@ func main() {
 	r := gin.Default()
 
 	r.Use(middleware.HandlerMetricsMiddleware())
+
+	registerVersionMetric()
 	r.GET("/metrics", gin.WrapH(promhttp.Handler()))
 
 	r.GET("/healthz", func(c *gin.Context) {
@@ -114,4 +117,17 @@ func main() {
 		log.Error(err, "server failed to start")
 		os.Exit(1)
 	}
+}
+
+func registerVersionMetric() {
+	versionMetric := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "piccolo_api_version",
+			Help: "Piccolo server version info",
+		},
+		[]string{"version", "commit", "date"},
+	)
+
+	versionMetric.WithLabelValues(version, commit, date).Set(1)
+	prometheus.MustRegister(versionMetric)
 }
