@@ -19,6 +19,7 @@ import (
 	"github.com/laixintao/piccolo/pkg/registry"
 	"github.com/laixintao/piccolo/pkg/sd"
 	"github.com/laixintao/piccolo/pkg/state"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
 )
@@ -182,6 +183,17 @@ func startMetricsServer(ctx context.Context,
 	g *errgroup.Group,
 ) error {
 	metrics.Register()
+
+	versionMetric := prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "pi_version",
+			Help: "Pi  server version info",
+		},
+		[]string{"version", "commit", "date"},
+	)
+	versionMetric.WithLabelValues(version, commit, date).Set(1)
+	metrics.DefaultRegisterer.MustRegister(versionMetric)
+
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(metrics.DefaultGatherer, promhttp.HandlerOpts{}))
 	mux.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
