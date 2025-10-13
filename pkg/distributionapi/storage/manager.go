@@ -9,7 +9,7 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const MaxBatch = 1000
+const MaxBatch = 100
 
 type DistributionManagerInterface interface {
 	CreateDistributions(distributions []*model.Distribution) error
