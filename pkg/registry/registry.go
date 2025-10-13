@@ -127,7 +127,7 @@ func (r *Registry) handle(rw mux.ResponseWriter, req *http.Request) {
 			r.log.Info("", kvs...)
 			return
 		}
-		r.log.Error(rw.Error(), "reuqest-to-registry", kvs...)
+		r.log.Error(rw.Error(), "request-to-registry", kvs...)
 	}()
 	metrics.HttpRequestsInflight.WithLabelValues(path).Add(1)
 

@@ -16,6 +16,8 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/laixintao/piccolo/internal/httputils"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
+	"github.com/laixintao/piccolo/pkg/metrics"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 type ServiceDiscover interface {
@@ -116,6 +118,7 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	params.Add("count", strconv.Itoa(count))
 	u.RawQuery = params.Encode()
 
+	resolveTimer := prometheus.NewTimer(metrics.ResolveDurHistogram.WithLabelValues())
 	resp, err := httputils.DoRequestWithRetry(ctx,
 		"GET",
 		u.String(),
@@ -128,6 +131,7 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 		3*time.Second,
 		p.httpClient,
 	)
+	resolveTimer.ObserveDuration()
 	if err != nil {
 		log.Error(err, "Resolve error")
 		return nil, err

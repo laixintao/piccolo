@@ -3,6 +3,7 @@ package storage
 import (
 	"fmt"
 
+	"github.com/google/uuid"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -35,16 +36,32 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	return nil
 }
 
+func generateUpdateKey() string {
+	return uuid.NewString()
+}
+
 func (m *DistributionManager) SyncDistributions(holder string, distributions []*model.Distribution) error {
+	updateKey := generateUpdateKey()
+
 	if len(distributions) == 0 {
 		return nil
 	}
 
-	if err := m.db.Where("holder = ?", holder).Delete(&model.Distribution{}).Error; err != nil {
+	for _, d := range distributions {
+		d.UpdateKey = updateKey
+	}
+
+	if err := m.db.Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "group"}, {Name: "key"}, {Name: "holder"}},
+		DoUpdates: clause.AssignmentColumns([]string{"update_key"}),
+	}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
 		return err
 	}
 
-	if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
+	if err := m.db.
+		Where("holder = ? and update_key != ?", holder, updateKey).
+		Delete(&model.Distribution{}).
+		Error; err != nil {
 		return err
 	}
 

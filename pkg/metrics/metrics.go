@@ -21,8 +21,8 @@ var (
 	}, []string{"registry", "cache"})
 	ResolveDurHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "piccolo_resolve_duration_seconds",
-		Help: "The duration for router to resolve a peer.",
-	}, []string{"router"})
+		Help: "The duration for using piccolo to resolve a key.",
+	}, []string{})
 	AdvertisedImages = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "piccolo_advertised_images",
 		Help: "Number of images advertised to be available.",

@@ -29,7 +29,7 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		h.log.Error(err, "failed to bind JSON request")
 		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
 			Success: false,
-			Message: "Wrong reuqest format: " + err.Error(),
+			Message: "Wrong request format: " + err.Error(),
 		})
 		return
 	}
@@ -132,7 +132,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		h.log.Error(err, "failed to bind JSON request")
 		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
 			Success: false,
-			Message: "Wrong reuqest format: " + err.Error(),
+			Message: "Wrong request format: " + err.Error(),
 		})
 		return
 	}
