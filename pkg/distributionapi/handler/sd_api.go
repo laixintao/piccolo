@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
@@ -111,7 +112,14 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		})
 		return
 	}
+	if len(distributions) == 0 {
+		c.JSON(http.StatusNotFound,
+			gin.H{"message": fmt.Sprintf("Didn't find the key %s in piccolo", req.Key)},
+		)
+		return
+	}
 	holders := make([]string, 0, len(distributions))
+
 	for _, dist := range distributions {
 		holders = append(holders, dist.Holder)
 	}
