@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
@@ -32,7 +33,12 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 		return nil
 	}
 
-	m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch)
+	for _, d := range distributions {
+		if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).Create(d).Error; err != nil {
+			return err
+		}
+		metrics.DBInsertTotal.WithLabelValues().Inc()
+	}
 	return nil
 }
 
@@ -51,11 +57,14 @@ func (m *DistributionManager) SyncDistributions(holder string, distributions []*
 		d.UpdateKey = updateKey
 	}
 
-	if err := m.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "group"}, {Name: "key"}, {Name: "holder"}},
-		DoUpdates: clause.AssignmentColumns([]string{"update_key"}),
-	}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
-		return err
+	for _, d := range distributions {
+		if err := m.db.Clauses(clause.OnConflict{
+			Columns:   []clause.Column{{Name: "group"}, {Name: "key"}, {Name: "holder"}},
+			DoUpdates: clause.AssignmentColumns([]string{"update_key"}),
+		}).Create(d).Error; err != nil {
+			return err
+		}
+		metrics.DBInsertTotal.WithLabelValues().Inc()
 	}
 
 	if err := m.db.

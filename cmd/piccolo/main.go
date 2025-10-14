@@ -11,6 +11,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
 	distributionHandler "github.com/laixintao/piccolo/pkg/distributionapi/handler"
+	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/middleware"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
@@ -130,4 +131,5 @@ func registerVersionMetric() {
 
 	versionMetric.WithLabelValues(version, commit, date).Set(1)
 	prometheus.MustRegister(versionMetric)
+	metrics.Register()
 }

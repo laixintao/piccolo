@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
@@ -135,6 +136,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 // sync api will delete all the holder's key, and then insert the current keys
 // POST /api/v1/distribution/sync
 func (h *DistributionHandler) Sync(c *gin.Context) {
+	start := time.Now()
 	var req model.ImageAdvertiseRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.log.Error(err, "failed to bind JSON request")
@@ -182,7 +184,8 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	h.log.Info("distributions created successfully", "holder", req.Holder, "count", len(distributions))
+	duration := time.Since(start).Seconds()
+	h.log.Info("distributions created successfully", "holder", req.Holder, "count", len(distributions), "duration_seconds", duration)
 	c.JSON(http.StatusCreated, model.ImageAdvertiseResponse{
 		Success: true,
 		Message: "Distribution created!",
