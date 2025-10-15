@@ -10,9 +10,10 @@ curl http://127.0.0.1:7789/api/v1/distribution/advertise -X POST -H "Content-Typ
 curl http://127.0.0.1:7789/api/v1/distribution/advertise -X POST -H "Content-Type: application/json" -d '{"keys":["foobar"],"holder":"192.168.120.7:5123","group":"localtest"}'
 
 echo "------------test find key"
-# test without the request host
 curl -sS 'http://127.0.0.1:7789/api/v1/distribution/findkey?key=foobar&count=5&group=localtest' -X GET | jq .
 
 echo "------------test find key with sort"
-# test without the request host
 curl -sS 'http://127.0.0.1:7789/api/v1/distribution/findkey?key=foobar&count=5&group=localtest&request_host=172.16.0.1' -X GET | jq .
+
+echo "------------test find key with sort, request_host=172.16.0.1:5000"
+curl -sS 'http://127.0.0.1:7789/api/v1/distribution/findkey?key=foobar&count=5&group=localtest&request_host=172.16.0.1:5000' -X GET | jq .

@@ -137,7 +137,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		}
 	}
 
-	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "returned", len(holders), "sort_cost_seconds", sortDuration)
+	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "queryed_from_db", len(holders), "sort_cost_seconds", sortDuration)
 	c.JSON(http.StatusOK, model.FindKeyResponse{
 		Key:     req.Key,
 		Holders: sorted[:limit],
