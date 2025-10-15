@@ -18,7 +18,7 @@ var (
 	MirrorRequestsTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "piccolo_mirror_requests_total",
 		Help: "Total number of mirror requests.",
-	}, []string{"registry", "cache"})
+	}, []string{"registry", "cache", "ref_kind"})
 	ResolveDurHistogram = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "piccolo_resolve_duration_seconds",
 		Help: "The duration for using piccolo to resolve a key.",

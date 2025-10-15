@@ -173,14 +173,13 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 	}
 
 	log := r.log.WithValues("key", key, "path", req.URL.Path, "ip", getClientIP(req))
-	log.Info("now hanlde mirror requests...")
 
 	defer func() {
 		cacheType := "hit"
 		if rw.Status() != http.StatusOK {
 			cacheType = "miss"
 		}
-		metrics.MirrorRequestsTotal.WithLabelValues(ref.originalRegistry, cacheType).Inc()
+		metrics.MirrorRequestsTotal.WithLabelValues(ref.originalRegistry, cacheType, string(ref.kind)).Inc()
 	}()
 
 	if !r.resolveLatestTag && ref.hasLatestTag() {
