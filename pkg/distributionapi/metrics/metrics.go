@@ -15,12 +15,18 @@ var (
 )
 
 var (
-	DBInsertTotal= prometheus.NewCounterVec(prometheus.CounterOpts{
-		Name: "piccolo_db_distribution_insert_total",
-		Help: "Total number of mirror requests.",
-	}, []string{})
+	DBQueryTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "piccolo_db_query_total",
+		Help: "Total number of database queries.",
+	}, []string{"operation"})
+	
+	DBQueryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "piccolo_db_query_duration_seconds",
+		Help: "Duration of database queries in seconds.",
+	}, []string{"operation"})
 )
 
 func Register() {
-	DefaultRegisterer.MustRegister(DBInsertTotal)
+	DefaultRegisterer.MustRegister(DBQueryTotal)
+	DefaultRegisterer.MustRegister(DBQueryDuration)
 }

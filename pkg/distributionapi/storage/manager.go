@@ -2,6 +2,7 @@ package storage
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
@@ -33,15 +34,23 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	}
 
 	for _, d := range distributions {
+		start := time.Now()
 		if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(d, MaxBatch).Error; err != nil {
 			return err
 		}
-		metrics.DBInsertTotal.WithLabelValues().Inc()
+		metrics.DBQueryTotal.WithLabelValues("insert").Inc()
+		metrics.DBQueryDuration.WithLabelValues("insert").Observe(time.Since(start).Seconds())
 	}
 	return nil
 }
 
 func (m *DistributionManager) GetHolderByKey(group string, key string, limit int) ([]string, error) {
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("get_holder_by_key").Inc()
+		metrics.DBQueryDuration.WithLabelValues("get_holder_by_key").Observe(time.Since(start).Seconds())
+	}()
+
 	var holders []string
 	query := m.db.Model(&model.Distribution{}).
 		Where("`key` = ? AND `group` = ?", key, group)
@@ -58,6 +67,12 @@ func (m *DistributionManager) GetHolderByKey(group string, key string, limit int
 }
 
 func (m *DistributionManager) GetKeysByHolder(holder string) ([]string, error) {
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("get_keys_by_holder").Inc()
+		metrics.DBQueryDuration.WithLabelValues("get_keys_by_holder").Observe(time.Since(start).Seconds())
+	}()
+
 	var keys []string
 	if err := m.db.
 		Model(&model.Distribution{}).
@@ -72,6 +87,12 @@ func (m *DistributionManager) DeleteByKeys(keys []string) error {
 	if len(keys) == 0 {
 		return nil
 	}
+
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("delete_by_keys").Inc()
+		metrics.DBQueryDuration.WithLabelValues("delete_by_keys").Observe(time.Since(start).Seconds())
+	}()
 
 	return m.db.
 		Where("`key` IN ?", keys).
