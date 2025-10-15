@@ -3,6 +3,8 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	"net/netip"
+	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -101,11 +103,11 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 
 	// Get limited holders if count is specified
 	var holders []string
-	var limit int
+	limit := 100
 	if req.Count > 0 {
 		limit = req.Count
 	}
-	holders, err := h.m.GetHolderByKey(req.Group, req.Key, limit)
+	holders, err := h.m.GetHolderByKey(req.Group, req.Key)
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key with limit", "key", req.Key, "count", req.Count)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -120,10 +122,25 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "returned", len(holders))
+	// sort by IP closing to the holder
+	sorted := holders
+	start := time.Now()
+	sortDuration := time.Since(start).Seconds()
+
+	if req.RequestHost != "" {
+		sorted, err = sortByLCPv4HostPort(holders, req.RequestHost)
+		if err != nil {
+			c.JSON(http.StatusNotFound,
+				gin.H{"message": "error when sort holder's order", "err": err.Error()},
+			)
+			return
+		}
+	}
+
+	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "returned", len(holders), "sort_cost_seconds", sortDuration)
 	c.JSON(http.StatusOK, model.FindKeyResponse{
 		Key:     req.Key,
-		Holders: holders,
+		Holders: sorted[:limit],
 		Group:   req.Group,
 	})
 }
@@ -234,4 +251,86 @@ func diffSets(a, b []string) (onlyA, onlyB []string) {
 	}
 
 	return
+}
+
+// lcpBits4 returns the number of leading equal bits between two IPv4 addrs.
+// Both a and b must be IPv4.
+func lcpBits4(a, b netip.Addr) int {
+	ba := a.As4()
+	bb := b.As4()
+
+	lcp := 0
+	for i := 0; i < 4; i++ {
+		x := ba[i] ^ bb[i]
+		if x == 0 {
+			lcp += 8
+			continue
+		}
+		// Count leading zeros in the first differing byte
+		for bit := 7; bit >= 0; bit-- {
+			if (x>>uint(bit))&1 == 0 {
+				lcp++
+			} else {
+				return lcp
+			}
+		}
+	}
+	return lcp
+}
+
+// sortByLCPv4HostPort sorts "ip:port" strings by the longest common prefix (bits)
+// of their IPv4 address with the given target IPv4 address.
+// Ports are ignored for ranking, but returned strings keep the original "ip:port" form.
+func sortByLCPv4HostPort(hostports []string, target string) ([]string, error) {
+	// Parse and validate target as IPv4
+	t, err := netip.ParseAddr(target)
+	if err != nil {
+		return nil, fmt.Errorf("parse target %q: %w", target, err)
+	}
+	t = t.Unmap()
+	if !t.Is4() {
+		return nil, fmt.Errorf("target %q is not IPv4", target)
+	}
+
+	// Parse inputs and precompute LCP
+	type item struct {
+		hostport string // original "ip:port"
+		ip       netip.Addr
+		lcp      int
+	}
+
+	items := make([]item, 0, len(hostports))
+	for _, hp := range hostports {
+		ap, err := netip.ParseAddrPort(hp)
+		if err != nil {
+			return nil, fmt.Errorf("parse %q: %w", hp, err)
+		}
+		ip := ap.Addr().Unmap()
+		if !ip.Is4() {
+			return nil, fmt.Errorf("%q is not IPv4", hp)
+		}
+		items = append(items, item{
+			hostport: hp,
+			ip:       ip,
+			lcp:      lcpBits4(ip, t),
+		})
+	}
+
+	// Sort by LCP desc; tie-breaker by numeric IP, then by port string for stability
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].lcp != items[j].lcp {
+			return items[i].lcp > items[j].lcp
+		}
+		if items[i].ip != items[j].ip {
+			return items[i].ip.Less(items[j].ip)
+		}
+		// Optional: tie-break by port lexicographically; preserves deterministic order
+		return items[i].hostport < items[j].hostport
+	})
+
+	out := make([]string, len(items))
+	for i := range items {
+		out[i] = items[i].hostport
+	}
+	return out, nil
 }

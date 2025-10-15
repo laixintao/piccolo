@@ -14,7 +14,7 @@ const MaxBatch = 100
 
 type DistributionManagerInterface interface {
 	CreateDistributions(distributions []*model.Distribution) error
-	GetHolderByKey(key string, limit int) ([]string, error)
+	GetHolderByKey(key string) ([]string, error)
 	Close() error
 }
 
@@ -44,7 +44,7 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	return nil
 }
 
-func (m *DistributionManager) GetHolderByKey(group string, key string, limit int) ([]string, error) {
+func (m *DistributionManager) GetHolderByKey(group string, key string) ([]string, error) {
 	start := time.Now()
 	defer func() {
 		metrics.DBQueryTotal.WithLabelValues("get_holder_by_key").Inc()
@@ -54,10 +54,6 @@ func (m *DistributionManager) GetHolderByKey(group string, key string, limit int
 	var holders []string
 	query := m.db.Model(&model.Distribution{}).
 		Where("`key` = ? AND `group` = ?", key, group)
-
-	if limit > 0 {
-		query = query.Limit(limit)
-	}
 
 	if err := query.Pluck("holder", &holders).Error; err != nil {
 		return nil, fmt.Errorf("failed to get holders by key %s: %w", key, err)

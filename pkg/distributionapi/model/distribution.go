@@ -29,9 +29,10 @@ type ImageAdvertiseResponse struct {
 }
 
 type FindKeyRequest struct {
-	Key   string `form:"key" binding:"required"`
-	Group string `form:"group" binding:"required"`
-	Count int    `form:"count"`
+	Key         string `form:"key" binding:"required"`
+	Group       string `form:"group" binding:"required"`
+	Count       int    `form:"count"`
+	RequestHost string `form:"request_host"`
 }
 
 type FindKeyResponse struct {
