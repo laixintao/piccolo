@@ -9,5 +9,7 @@ debug:
 		--registries '${REGISTRY_DOMAIN_LIST}' \
 		--log-level DEBUG
 
+COMMIT := $(shell git rev-parse --short HEAD)
+DATE := $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
 build-api:
-	go build -ldflags "-X main.version=v0.0.5 -X main.commit=$(git rev-parse --short HEAD) -X main.date=$(date -u +%Y-%m-%dT%H:%M:%SZ)" -o piccolo cmd/piccolo/main.go
+	go build -ldflags "-X main.version=v0.0.5 -X main.commit=${COMMIT} -X main.date=${DATE}" -o piccolo cmd/piccolo/main.go
