@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"path"
 	"strconv"
+	"strings"
 
 	"time"
 
@@ -116,6 +117,7 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	params.Add("group", p.group)
 	params.Add("key", key)
 	params.Add("count", strconv.Itoa(count))
+	params.Add("request_host", strings.Split(p.piAddr, ":")[0])
 	u.RawQuery = params.Encode()
 
 	resolveTimer := prometheus.NewTimer(metrics.ResolveDurHistogram.WithLabelValues())
@@ -133,12 +135,10 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	)
 	resolveTimer.ObserveDuration()
 	if err != nil {
-		log.Error(err, "Resolve error")
+		log.Error(err, "Resolve error", "requestAddress", u.String())
 		return nil, err
 	}
 	defer resp.Body.Close()
-
-	log.Info("Resolve done")
 
 	var findkeyResp model.FindKeyResponse
 	if err := json.NewDecoder(resp.Body).Decode(&findkeyResp); err != nil {
@@ -153,7 +153,7 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 		}
 		addrPorts = append(addrPorts, ap)
 	}
-	log.Info("Resolve done, find addrPorts", "addrPorts", addrPorts)
+	log.Info("Resolve done, find addrPorts", "addrPorts", addrPorts, "requestAddress", u.String())
 
 	return addrPorts, nil
 }
