@@ -3,7 +3,6 @@ package storage
 import (
 	"fmt"
 
-	"github.com/google/uuid"
 	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"gorm.io/gorm"
@@ -14,7 +13,7 @@ const MaxBatch = 100
 
 type DistributionManagerInterface interface {
 	CreateDistributions(distributions []*model.Distribution) error
-	GetHolderByKey(key string, limit int) ([]*model.Distribution, error)
+	GetHolderByKey(key string, limit int) ([]string, error)
 	Close() error
 }
 
@@ -34,7 +33,7 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	}
 
 	for _, d := range distributions {
-		if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).Create(d).Error; err != nil {
+		if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(d, MaxBatch).Error; err != nil {
 			return err
 		}
 		metrics.DBInsertTotal.WithLabelValues().Inc()
@@ -42,54 +41,41 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	return nil
 }
 
-func generateUpdateKey() string {
-	return uuid.NewString()
-}
+func (m *DistributionManager) GetHolderByKey(group string, key string, limit int) ([]string, error) {
+	var holders []string
+	query := m.db.Model(&model.Distribution{}).
+		Where("`key` = ? AND `group` = ?", key, group)
 
-func (m *DistributionManager) SyncDistributions(holder string, distributions []*model.Distribution) error {
-	updateKey := generateUpdateKey()
-
-	if len(distributions) == 0 {
-		return nil
-	}
-
-	for _, d := range distributions {
-		d.UpdateKey = updateKey
-	}
-
-	for _, d := range distributions {
-		if err := m.db.Clauses(clause.OnConflict{
-			Columns:   []clause.Column{{Name: "group"}, {Name: "key"}, {Name: "holder"}},
-			DoUpdates: clause.AssignmentColumns([]string{"update_key"}),
-		}).Create(d).Error; err != nil {
-			return err
-		}
-		metrics.DBInsertTotal.WithLabelValues().Inc()
-	}
-
-	if err := m.db.
-		Where("holder = ? and update_key != ?", holder, updateKey).
-		Delete(&model.Distribution{}).
-		Error; err != nil {
-		return err
-	}
-
-	return nil
-}
-
-func (m *DistributionManager) GetHolderByKey(group string, key string, limit int) ([]*model.Distribution, error) {
-	var distributions []*model.Distribution
-
-	query := m.db.Where("`key` = ? and `group` = ?", key, group)
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
 
-	if err := query.Find(&distributions).Error; err != nil {
+	if err := query.Pluck("holder", &holders).Error; err != nil {
 		return nil, fmt.Errorf("failed to get holders by key %s: %w", key, err)
 	}
 
-	return distributions, nil
+	return holders, nil
+}
+
+func (m *DistributionManager) GetKeysByHolder(holder string) ([]string, error) {
+	var keys []string
+	if err := m.db.
+		Model(&model.Distribution{}).
+		Where("holder = ?", holder).
+		Pluck("`key`", &keys).Error; err != nil {
+		return nil, err
+	}
+	return keys, nil
+}
+
+func (m *DistributionManager) DeleteByKeys(keys []string) error {
+	if len(keys) == 0 {
+		return nil
+	}
+
+	return m.db.
+		Where("`key` IN ?", keys).
+		Delete(&model.Distribution{}).Error
 }
 
 func (m *DistributionManager) Close() error {

@@ -99,13 +99,13 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	// Get limited distributions if count is specified
-	var distributions []*model.Distribution
+	// Get limited holders if count is specified
+	var holders []string
 	var limit int
 	if req.Count > 0 {
 		limit = req.Count
 	}
-	distributions, err := h.m.GetHolderByKey(req.Group, req.Key, limit)
+	holders, err := h.m.GetHolderByKey(req.Group, req.Key, limit)
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key with limit", "key", req.Key, "count", req.Count)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -113,16 +113,11 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		})
 		return
 	}
-	if len(distributions) == 0 {
+	if len(holders) == 0 {
 		c.JSON(http.StatusNotFound,
 			gin.H{"message": fmt.Sprintf("Didn't find the key %s in piccolo", req.Key)},
 		)
 		return
-	}
-	holders := make([]string, 0, len(distributions))
-
-	for _, dist := range distributions {
-		holders = append(holders, dist.Holder)
 	}
 
 	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "returned", len(holders))
@@ -155,39 +150,88 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	distributions := make([]*model.Distribution, 0, len(req.Keys))
-	for _, key := range req.Keys {
-		if key == "" {
-			continue
-		}
-		distributions = append(distributions, &model.Distribution{
-			Key:    key,
-			Holder: req.Holder,
-			Group:  req.Group,
-		})
-	}
-
-	if len(distributions) == 0 {
-		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
-			Success: false,
-			Message: "No operation needed",
-		})
-		return
-	}
-
-	if err := h.m.SyncDistributions(req.Holder, distributions); err != nil {
-		h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
+	existingKeys, err := h.m.GetKeysByHolder(req.Holder)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
-			Message: "Error when create distribution in batch" + err.Error(),
+			Message: "Error when delete keys from DB",
 		})
-		return
+	}
+
+	currentKeys := req.Keys
+
+	onlyInDB, onlyInRequest := diffSets(existingKeys, currentKeys)
+
+	if len(onlyInDB) != 0 {
+		if err := h.m.DeleteByKeys(onlyInDB); err != nil {
+			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
+				Success: false,
+				Message: "Error when delete keys from DB",
+			})
+			return
+		}
+	}
+
+	if len(onlyInRequest) != 0 {
+		distributions := make([]*model.Distribution, 0, len(onlyInRequest))
+		for _, key := range onlyInRequest {
+			if key == "" {
+				continue
+			}
+			distributions = append(distributions, &model.Distribution{
+				Key:    key,
+				Holder: req.Holder,
+				Group:  req.Group,
+			})
+		}
+
+		if err := h.m.CreateDistributions(distributions); err != nil {
+			h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
+			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
+				Success: false,
+				Message: "Error when create distribution in batch" + err.Error(),
+			})
+			return
+		}
 	}
 
 	duration := time.Since(start).Seconds()
-	h.log.Info("distributions created successfully", "holder", req.Holder, "count", len(distributions), "duration_seconds", duration)
+	h.log.Info("distributions created successfully",
+		"holder", req.Holder,
+		"duration_seconds", duration,
+		"delete_from_db", len(onlyInDB),
+		"add_to_db", len(onlyInRequest),
+	)
 	c.JSON(http.StatusCreated, model.ImageAdvertiseResponse{
 		Success: true,
 		Message: "Distribution created!",
 	})
+}
+
+func diffSets(a, b []string) (onlyA, onlyB []string) {
+	setA := make(map[string]struct{}, len(a))
+	setB := make(map[string]struct{}, len(b))
+
+	for _, v := range a {
+		setA[v] = struct{}{}
+	}
+	for _, v := range b {
+		setB[v] = struct{}{}
+	}
+
+	// A - B
+	for v := range setA {
+		if _, found := setB[v]; !found {
+			onlyA = append(onlyA, v)
+		}
+	}
+
+	// B - A
+	for v := range setB {
+		if _, found := setA[v]; !found {
+			onlyB = append(onlyB, v)
+		}
+	}
+
+	return
 }

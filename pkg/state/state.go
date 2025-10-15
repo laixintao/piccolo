@@ -103,7 +103,7 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 				flush()
 			}
 		case <-timer.C:
-			log.Info("Full updated triggered due to 10 seoncds passed since last event", "lenBuffer", len(buffer))
+			log.Info("Full updated triggered due to wait time passed since last event", "lenBuffer", len(buffer), "waitTime", FULLUPDATE_WAITTIME)
 			flush()
 		}
 	}
@@ -147,7 +147,7 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 		targets[img.Digest.String()] = img.Registry
 		metrics.AdvertisedImages.WithLabelValues(img.Registry).Add(1)
 	}
-	var keyList []string
+	keyList := []string{}
 	for key, reg := range keys {
 		keyList = append(keyList, key)
 		metrics.AdvertisedKeys.WithLabelValues(reg).Add(1)

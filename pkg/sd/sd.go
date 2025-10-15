@@ -86,7 +86,7 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
 		},
-		5*time.Second,
+		10*time.Second,
 		1*time.Second,
 		3*time.Second,
 		p.httpClient,
@@ -180,13 +180,13 @@ func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
 		},
-		10*time.Second,
+		90*time.Second,
 		1*time.Second,
-		3*time.Second,
+		10*time.Second,
 		p.httpClient,
 	)
 	if err != nil {
-		log.Error(err, "Advertise error")
+		log.Error(err, "Advertise error", "requestBody", body)
 		return err
 	}
 	defer resp.Body.Close()
