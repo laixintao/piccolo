@@ -107,3 +107,22 @@ func (m *DistributionManager) Close() error {
 
 	return nil
 }
+
+func (m *DistributionManager) RefreshHostAddr(hostAddr string) error {
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("refresh_host_addr").Inc()
+		metrics.DBQueryDuration.WithLabelValues("refresh_host_addr").Observe(time.Since(start).Seconds())
+	}()
+
+	now := time.Now()
+	host := &model.Host{
+		HostAddr: hostAddr,
+		LastSeen: now,
+	}
+
+	return m.db.Clauses(clause.OnConflict{
+		Columns: []clause.Column{{Name: "host_addr"}},
+		DoUpdates: clause.AssignmentColumns([]string{"last_seen", "updated_at"}),
+	}).Create(host).Error
+}

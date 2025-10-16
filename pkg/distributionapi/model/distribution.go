@@ -17,6 +17,18 @@ func (Distribution) TableName() string {
 	return "distribution_tab"
 }
 
+type Host struct {
+	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
+	HostAddr  string    `gorm:"size:64;uniqueIndex:idx_host_lastseen_uniq,priority:1 json:"host_addr"`
+	LastSeen  time.Time `gorm:"uniqueIndex:idx_host_lastseen_uniq,priority:2 json:"last_seen"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (Host) TableName() string {
+	return "host_tab"
+}
+
 type ImageAdvertiseRequest struct {
 	Holder string   `json:"holder" binding:"required"`
 	Keys   []string `json:"keys" binding:"required"`
@@ -24,6 +36,11 @@ type ImageAdvertiseRequest struct {
 }
 
 type ImageAdvertiseResponse struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+}
+
+type KeepAliveResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
 }
@@ -43,5 +60,5 @@ type FindKeyResponse struct {
 }
 
 type KeepAliveRequest struct {
-	Host string   `json:"host" binding:"required"`
+	HostAddr string `json:"host" binding:"required"`
 }

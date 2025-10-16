@@ -34,6 +34,7 @@ type Arguments struct {
 	DBPassword     string     `arg:"--db-password,env:DB_PASSWORD" default:"" help:"MySQL database password"`
 	DBName         string     `arg:"--db-name,env:DB_NAME" default:"piccolo" help:"MySQL database name"`
 	Version        bool       `arg:"-v,--version" help:"show version"`
+	MigrateDB      bool       `arg:"--migrate-db" help:"Auto change database's schema"`
 }
 
 func main() {
@@ -75,9 +76,12 @@ func main() {
 
 	log.Info("MySQL database connected", "host", args.DBHost, "database", args.DBName)
 
-	if err := storage.AutoMigrate(db, &model.Distribution{}); err != nil {
-		log.Error(err, "failed to run database migration")
-		os.Exit(1)
+	if args.MigrateDB {
+		log.Info("Now apply datbase migration (DDL)...")
+		if err := storage.AutoMigrate(db, &model.Distribution{}, &model.Host{}); err != nil {
+			log.Error(err, "failed to run database migration")
+			os.Exit(1)
+		}
 	}
 
 	log.Info("database migration completed successfully")
@@ -103,6 +107,7 @@ func main() {
 
 	v1 := r.Group("/api/v1")
 	{
+		v1.POST("/keepalive", distributionHandler.KeepAlive)
 		images := v1.Group("/distribution")
 		{
 			images.POST("/advertise", distributionHandler.AdvertiseImage)

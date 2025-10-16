@@ -334,3 +334,31 @@ func sortByLCPv4HostPort(hostports []string, target string) ([]string, error) {
 	}
 	return out, nil
 }
+
+func (h *DistributionHandler) KeepAlive(c *gin.Context) {
+	var req model.KeepAliveRequest
+	if err := c.ShouldBindJSON(&req); err != nil{
+		h.log.Error(err, "keepalive failed to bind JSON request")
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "Wrong request format: " + err.Error(),
+		})
+	}
+
+	if err := h.m.RefreshHostAddr(req.HostAddr); err != nil {
+		h.log.Error(err, "Failed to refresh host Addr!", "host_addr", req.HostAddr)
+		c.JSON(http.StatusInternalServerError, model.KeepAliveResponse{
+			Success: false,
+			Message: "Failed to keepalive" ,
+		})
+		return
+	}
+
+	h.log.Info("Keepalive for host success", "host_addr", req.HostAddr)
+	c.JSON(http.StatusCreated, model.KeepAliveResponse{
+		Success: true,
+		Message: "keep alive success",
+	})
+
+
+}
