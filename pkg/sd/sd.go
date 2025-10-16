@@ -26,6 +26,7 @@ type ServiceDiscover interface {
 	Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error)
 	Advertise(ctx context.Context, keys []string) error
 	Sync(ctx context.Context, keys []string) error
+	DoKeepAlive(ctx context.Context) error
 }
 
 type PiccoloServiceDiscover struct {
@@ -197,6 +198,46 @@ func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
 		return err
 	}
 	log.Info("Sync done", "response", string(responseBody))
+
+	return nil
+}
+
+func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
+	log := logr.FromContextOrDiscard(ctx)
+	url := p.piccoloAddress
+	url.Path = path.Join(url.Path, "api", "v1", "keepalive")
+	request := model.KeepAliveRequest{
+		Host: p.piAddr,
+	}
+	body, err := json.Marshal(request)
+	if err != nil {
+		return err
+	}
+	resp, err := httputils.DoRequestWithRetry(ctx,
+		"POST",
+		url.String(),
+		body,
+		map[string]string{
+			"Content-Type": "application/json",
+			"Accept":       "application/json",
+		},
+		30*time.Second,
+		1*time.Second,
+		10*time.Second,
+		p.httpClient,
+	)
+	if err != nil {
+		log.Error(err, "SD Keepalive Error", "requestBody", body)
+		return err
+	}
+	defer resp.Body.Close()
+
+	responseBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		log.Error(err, "Failed to read response body")
+		return err
+	}
+	log.Info("Keepalive Done", "response", string(responseBody))
 
 	return nil
 }

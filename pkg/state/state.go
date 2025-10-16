@@ -15,8 +15,9 @@ import (
 )
 
 const (
-	FULLUPDATE_WAITTIME = 60 * time.Second
-	MAX_DELETION_EVENTS = 100
+	FULLUPDATE_WAITTIME        = 60 * time.Second
+	MAX_DELETION_EVENTS        = 100
+	HEART_BEAT_INTERVAL_MINUTE = 10
 )
 
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
@@ -36,6 +37,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 
 	// random delay avoid all same Pi updates at the same time
 	go startIntervalSync(ctx, fullRefreshMinutes, fullUpdatesCh)
+	go startKeepAlive(ctx, sd)
 
 	for {
 		select {
@@ -217,5 +219,39 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 			return
 		}
 	}
+}
 
+func startKeepAlive(ctx context.Context, sd sd.ServiceDiscover) {
+	log := logr.FromContextOrDiscard(ctx)
+	rand.Seed(time.Now().UnixNano())
+	resetInMinutes := rand.Int63n(HEART_BEAT_INTERVAL_MINUTE)
+	log.Info("Heart beat timer will reset in", "minutes", resetInMinutes)
+
+	select {
+	case <-time.After(time.Duration(resetInMinutes) * time.Minute):
+		log.Info("Heart beat first trigger wait period over.")
+	case <-ctx.Done():
+		return
+	}
+
+	log.Info("First heart beat starts, then trigger for every", "minutes", HEART_BEAT_INTERVAL_MINUTE)
+	if err := sd.DoKeepAlive(ctx); err != nil {
+		log.Error(err, "Error when do keepalive")
+	}
+
+	// update for const interval
+	keepaliveTicker := time.NewTicker(time.Duration(HEART_BEAT_INTERVAL_MINUTE) * time.Minute)
+	defer keepaliveTicker.Stop()
+
+	for {
+		select {
+		case <-keepaliveTicker.C:
+			log.Info("By Ticker: Running scheduled image state update")
+			if err := sd.DoKeepAlive(ctx); err != nil {
+				log.Error(err, "Error when do keepalive")
+			}
+		case <-ctx.Done():
+			return
+		}
+	}
 }

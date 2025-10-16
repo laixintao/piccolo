@@ -41,3 +41,7 @@ type FindKeyResponse struct {
 	Holders []string `json:"holders"`
 	Total   int      `json:"total"`
 }
+
+type KeepAliveRequest struct {
+	Host string   `json:"host" binding:"required"`
+}

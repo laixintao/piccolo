@@ -59,6 +59,10 @@ var (
 		Name:      "requests_blob_inflight",
 		Help:      "Current uploading blobs, current connection gauge",
 	}, []string{})
+	HeartBeatTotal = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "piccolo_heart_beat_total",
+		Help: "How many times we report ourself's health",
+	})
 )
 
 func Register() {
