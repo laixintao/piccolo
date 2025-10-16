@@ -17,38 +17,30 @@ import (
 const (
 	FULLUPDATE_WAITTIME = 60 * time.Second
 	MAX_DELETION_EVENTS = 100
-	JITTER_PERCENT      = 0.1
 )
 
-func jitterDuration(base time.Duration) time.Duration {
-	factor := 1 + (rand.Float64()*2-1)*JITTER_PERCENT
-	return time.Duration(float64(base) * factor)
-}
-
-func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, fullRefreshMinutes int64, resolveLatestTag bool) error {
+func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
+	fullRefreshMinutes int64,
+	resolveLatestTag bool) error {
 	log := logr.FromContextOrDiscard(ctx)
 	eventCh, errCh, err := ociClient.Subscribe(ctx)
 	if err != nil {
 		return err
 	}
 
-	jitterUpdateDuration := jitterDuration(time.Duration(fullRefreshMinutes) * time.Minute)
-	log.Info("Start periodic updates channel.", "durationMinutes", jitterUpdateDuration.Minutes())
-
-	expirationTicker := time.NewTicker(jitterUpdateDuration)
-	defer expirationTicker.Stop()
+	log.Info("Start periodic updates channel.", "durationMinutes", fullRefreshMinutes)
 
 	fullUpdatesCh := make(chan string, 10)
 	fullUpdatesCh <- "pi-start" // trigger full updates when pi agent starts
 	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
 
+	// random delay avoid all same Pi updates at the same time
+	go startIntervalSync(ctx, fullRefreshMinutes, fullUpdatesCh)
+
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-expirationTicker.C:
-			log.Info("By Ticker: Running scheduled image state update")
-			fullUpdatesCh <- "ticker"
 
 		case event, ok := <-eventCh:
 			if !ok {
@@ -103,7 +95,7 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 				flush()
 			}
 		case <-timer.C:
-			log.Info("Full updated triggered due to wait time passed since last event", "lenBuffer", len(buffer), "waitTime", FULLUPDATE_WAITTIME)
+			log.Info("Full updated triggered due to wait time passed since last event", "lenBuffer", len(buffer), "waitTime", FULLUPDATE_WAITTIME, "buffer", buffer)
 			flush()
 		}
 	}
@@ -194,4 +186,36 @@ func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ev
 		}
 	}
 	return len(keys), nil
+}
+
+func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh chan<- string) {
+	log := logr.FromContextOrDiscard(ctx)
+	rand.Seed(time.Now().UnixNano())
+	resetInMinutes := rand.Int63n(intervalMinutes)
+	log.Info("fullUpdatesTimer will be reset in minutes", "minutes", resetInMinutes)
+
+	select {
+	case <-time.After(time.Duration(resetInMinutes) * time.Minute):
+		log.Info("Interval update first trigger wait period over.")
+	case <-ctx.Done():
+		return
+	}
+
+	log.Info("Interval update first trigger full sync, then trigger for every", "minutes", intervalMinutes)
+	fullUpdatesCh <- "ticker"
+
+	// update for const interval
+	expirationTicker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)
+	defer expirationTicker.Stop()
+
+	for {
+		select {
+		case <-expirationTicker.C:
+			log.Info("By Ticker: Running scheduled image state update")
+			fullUpdatesCh <- "ticker"
+		case <-ctx.Done():
+			return
+		}
+	}
+
 }
