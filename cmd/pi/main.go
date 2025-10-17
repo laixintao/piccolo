@@ -100,7 +100,7 @@ func main() {
 		log.Error(err, "Error when start Pi Server")
 		os.Exit(1)
 	}
-	log.Info("Start Pi server", "address", args.PiAddr)
+	log.Info("Start Pi server", "address", args.PiAddr, "MaxUploadBlobBytesPerSecond", args.MaxUploadBlobBytesPerSecond)
 
 	// Registry
 	registryOpts := []registry.Option{

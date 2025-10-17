@@ -70,12 +70,11 @@ func InitMySQL(config *DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// 配置 prometheus metrics，必须在连接成功后使用
 	if err := db.Use(prometheus.New(prometheus.Config{
-		DBName:          config.Database, // 使用数据库名称作为 label
-		RefreshInterval: 15,              // metrics 刷新间隔（秒）
+		DBName:          config.Database,
+		RefreshInterval: 15,
 		MetricsCollector: []prometheus.MetricsCollector{
-			&prometheus.MySQL{}, // 收集 MySQL 特定的 metrics
+			&prometheus.MySQL{},
 		},
 	})); err != nil {
 		return nil, fmt.Errorf("failed to initialize prometheus plugin: %w", err)
