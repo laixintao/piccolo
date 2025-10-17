@@ -79,7 +79,7 @@ func (m *DistributionManager) GetKeysByHolder(holder string) ([]string, error) {
 	return keys, nil
 }
 
-func (m *DistributionManager) DeleteByKeys(keys []string) error {
+func (m *DistributionManager) DeleteByKeysByHolder(keys []string, holder string) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -91,7 +91,7 @@ func (m *DistributionManager) DeleteByKeys(keys []string) error {
 	}()
 
 	return m.db.
-		Where("`key` IN ?", keys).
+		Where("`key` IN ? AND holder = ?", keys, holder).
 		Delete(&model.Distribution{}).Error
 }
 
@@ -123,6 +123,6 @@ func (m *DistributionManager) RefreshHostAddr(hostAddr string) error {
 
 	return m.db.Clauses(clause.OnConflict{
 		Columns: []clause.Column{{Name: "host_addr"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_seen", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"last_seen"}),
 	}).Create(host).Error
 }

@@ -19,8 +19,8 @@ func (Distribution) TableName() string {
 
 type Host struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	HostAddr  string    `gorm:"size:64;uniqueIndex:idx_host_lastseen_uniq,priority:1 json:"host_addr"`
-	LastSeen  time.Time `gorm:"uniqueIndex:idx_host_lastseen_uniq,priority:2 json:"last_seen"`
+	HostAddr  string    `gorm:"size:64;uniqueIndex:idx_host" json:"host_addr"`
+	LastSeen  time.Time `json:"last_seen"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
