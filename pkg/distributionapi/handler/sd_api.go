@@ -138,6 +138,11 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 	}
 
 	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "queryed_from_db", len(holders), "sort_cost_seconds", sortDuration)
+
+	if limit > len(sorted) {
+		limit = len(sorted)
+	}
+
 	c.JSON(http.StatusOK, model.FindKeyResponse{
 		Key:     req.Key,
 		Holders: sorted[:limit],
@@ -337,7 +342,7 @@ func sortByLCPv4HostPort(hostports []string, target string) ([]string, error) {
 
 func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 	var req model.KeepAliveRequest
-	if err := c.ShouldBindJSON(&req); err != nil{
+	if err := c.ShouldBindJSON(&req); err != nil {
 		h.log.Error(err, "keepalive failed to bind JSON request")
 		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
 			Success: false,
@@ -349,7 +354,7 @@ func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 		h.log.Error(err, "Failed to refresh host Addr!", "host_addr", req.HostAddr)
 		c.JSON(http.StatusInternalServerError, model.KeepAliveResponse{
 			Success: false,
-			Message: "Failed to keepalive" ,
+			Message: "Failed to keepalive",
 		})
 		return
 	}
@@ -359,6 +364,5 @@ func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 		Success: true,
 		Message: "keep alive success",
 	})
-
 
 }
