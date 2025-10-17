@@ -33,14 +33,12 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 		return nil
 	}
 
-	for _, d := range distributions {
-		start := time.Now()
-		if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(d, MaxBatch).Error; err != nil {
-			return err
-		}
-		metrics.DBQueryTotal.WithLabelValues("insert").Inc()
-		metrics.DBQueryDuration.WithLabelValues("insert").Observe(time.Since(start).Seconds())
+	start := time.Now()
+	if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
+		return err
 	}
+	metrics.DBQueryTotal.WithLabelValues("insert").Inc()
+	metrics.DBQueryDuration.WithLabelValues("insert").Observe(time.Since(start).Seconds())
 	return nil
 }
 
@@ -122,7 +120,7 @@ func (m *DistributionManager) RefreshHostAddr(hostAddr string) error {
 	}
 
 	return m.db.Clauses(clause.OnConflict{
-		Columns: []clause.Column{{Name: "host_addr"}},
+		Columns:   []clause.Column{{Name: "host_addr"}},
 		DoUpdates: clause.AssignmentColumns([]string{"last_seen"}),
 	}).Create(host).Error
 }
