@@ -88,9 +88,9 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
 		},
-		10*time.Second,
+		60*time.Second,
 		1*time.Second,
-		3*time.Second,
+		10*time.Second,
 		p.httpClient,
 	)
 	if err != nil {

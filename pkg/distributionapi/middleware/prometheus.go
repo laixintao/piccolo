@@ -16,7 +16,7 @@ var (
 			Name: "http_requests_total",
 			Help: "Total number of HTTP requests",
 		},
-		[]string{"handler", "method", "status"},
+		[]string{"route", "method", "status"},
 	)
 
 	httpRequestDuration = promauto.NewHistogramVec(
@@ -25,7 +25,7 @@ var (
 			Help:    "HTTP request duration in seconds",
 			Buckets: prometheus.DefBuckets,
 		},
-		[]string{"handler", "method"},
+		[]string{"route", "method"},
 	)
 )
 
@@ -36,13 +36,14 @@ func HandlerMetricsMiddleware() gin.HandlerFunc {
 		duration := time.Since(start).Seconds()
 		status := c.Writer.Status()
 
-		handler := c.HandlerName()
-		if handler != "" {
+		route := c.FullPath()
+		if route == "" {
+			handler := c.HandlerName()
 			parts := strings.Split(handler, ".")
-			handler = parts[len(parts)-1]
+			route = parts[len(parts)-1]
 		}
 
-		httpRequestsTotal.WithLabelValues(handler, c.Request.Method, fmt.Sprintf("%d", status)).Inc()
-		httpRequestDuration.WithLabelValues(handler, c.Request.Method).Observe(duration)
+		httpRequestsTotal.WithLabelValues(route, c.Request.Method, fmt.Sprintf("%d", status)).Inc()
+		httpRequestDuration.WithLabelValues(route, c.Request.Method).Observe(duration)
 	}
 }
