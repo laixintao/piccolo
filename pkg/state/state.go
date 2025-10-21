@@ -24,10 +24,6 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 	fullRefreshMinutes int64,
 	resolveLatestTag bool) error {
 	log := logr.FromContextOrDiscard(ctx)
-	eventCh, errCh, err := ociClient.Subscribe(ctx)
-	if err != nil {
-		return err
-	}
 
 	log.Info("Start periodic updates channel.", "durationMinutes", fullRefreshMinutes)
 
@@ -40,32 +36,59 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 	go startKeepAlive(ctx, sd)
 
 	for {
-		select {
-		case <-ctx.Done():
-			return nil
+		eventCh, errCh, err := ociClient.Subscribe(ctx)
+		metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
+		if err != nil {
+			metrics.ContainerdSubscribeTotal.WithLabelValues("fail").Add(1)
+			log.Error(err, "Error when subscribe events from containerd, restart tracker.")
+		} else {
+			log.Info("Subscribed from containerd")
 
-		case event, ok := <-eventCh:
-			if !ok {
-				return errors.New("image event channel closed")
-			}
-			log.Info("received image event", "image", event.Image.String(), "type", event.Type)
+		SubscribeLoop:
+			for {
+				select {
+				case <-ctx.Done():
+					return nil
 
-			// Delete event will trigger full upates...
-			if event.Type == oci.DeleteEvent {
-				fullUpdatesCh <- "deleteEvent"
-				continue
-			}
+				case event, ok := <-eventCh:
+					if !ok {
+						log.Info("eventCh closed, restart the subscriber")
+						break SubscribeLoop
+					}
+					log.Info("received image event", "image", event.Image.String(), "type", event.Type)
+					metrics.ContainerdSubscribeEventTotal.WithLabelValues(string(event.Type)).Add(1)
 
-			if _, err := update(ctx, ociClient, sd, event, false, resolveLatestTag); err != nil {
-				log.Error(err, "received error when updating image")
-				continue
-			}
-		case err, ok := <-errCh:
-			if !ok {
-				return errors.New("image error channel closed")
-			}
-			log.Error(err, "event channel error")
+					// Delete event will trigger full upates...
+					if event.Type == oci.DeleteEvent {
+						fullUpdatesCh <- "deleteEvent"
+						continue
+					}
+
+					if _, err := update(ctx, ociClient, sd, event, false, resolveLatestTag); err != nil {
+						log.Error(err, "received error when updating image")
+						continue
+					}
+				case err, ok := <-errCh:
+					if !ok {
+						log.Info("errCh closed, restart the subscriber")
+						break SubscribeLoop
+					}
+					log.Error(err, "event channel error, restart the subscriber.")
+					break SubscribeLoop
+				}
+			} // subscribe for
 		}
+
+		log.Info("the subscriber need to be restarted, but I'll wait 3 seconds...")
+
+		select {
+		case <-time.After(time.Duration(3) * time.Second):
+			log.Info("Now restart subscribe containerd")
+		case <-ctx.Done():
+			log.Info("context canceled, terminate tracker")
+			return nil
+		}
+
 	}
 }
 

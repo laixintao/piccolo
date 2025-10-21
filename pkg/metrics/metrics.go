@@ -23,6 +23,14 @@ var (
 		Name: "piccolo_resolve_duration_seconds",
 		Help: "The duration for using piccolo to resolve a key.",
 	}, []string{})
+	ContainerdSubscribeTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "piccolo_containerd_subscribe_total",
+		Help: "Total number of subscribe requests piccolo sent to containerd",
+	}, []string{"result"})
+	ContainerdSubscribeEventTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "piccolo_containerd_events_total",
+		Help: "Containerd image events",
+	}, []string{"event_type"})
 	AdvertisedImages = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "piccolo_advertised_images",
 		Help: "Number of images advertised to be available.",
@@ -76,4 +84,6 @@ func Register() {
 	DefaultRegisterer.MustRegister(HttpResponseSizeHistogram)
 	DefaultRegisterer.MustRegister(HttpRequestsInflight)
 	DefaultRegisterer.MustRegister(HttpRequestsBlobHandlerInflight)
+	DefaultRegisterer.MustRegister(ContainerdSubscribeTotal)
+	DefaultRegisterer.MustRegister(ContainerdSubscribeEventTotal)
 }
