@@ -1,6 +1,7 @@
 package storage
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -42,7 +43,7 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	return nil
 }
 
-func (m *DistributionManager) GetHolderByKey(group string, key string) ([]string, error) {
+func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, key string) ([]string, error) {
 	start := time.Now()
 	defer func() {
 		metrics.DBQueryTotal.WithLabelValues("get_holder_by_key").Inc()
@@ -50,7 +51,7 @@ func (m *DistributionManager) GetHolderByKey(group string, key string) ([]string
 	}()
 
 	var holders []string
-	query := m.db.Model(&model.Distribution{}).
+	query := m.db.WithContext(ctx).Model(&model.Distribution{}).
 		Where("`group` = ? AND `key` = ?", group, key)
 
 	if err := query.Pluck("holder", &holders).Error; err != nil {

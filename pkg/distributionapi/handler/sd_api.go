@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/netip"
@@ -86,6 +87,9 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 // FindKey finds holders for a key
 // GET /api/v1/distribution/findkey?key=xxx&count=10&group=xxx
 func (h *DistributionHandler) FindKey(c *gin.Context) {
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
+	defer cancel()
+
 	var req model.FindKeyRequest
 	if err := c.ShouldBindQuery(&req); err != nil {
 		h.log.Error(err, "failed to bind query parameters")
@@ -108,7 +112,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 	if req.Count > 0 {
 		limit = req.Count
 	}
-	holders, err := h.m.GetHolderByKey(req.Group, req.Key)
+	holders, err := h.m.GetHolderByKey(ctx, req.Group, req.Key)
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key with limit", "key", req.Key, "count", req.Count)
 		c.JSON(http.StatusInternalServerError, gin.H{
