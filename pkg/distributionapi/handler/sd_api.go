@@ -9,6 +9,7 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
+	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
 )
@@ -115,6 +116,9 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		})
 		return
 	}
+
+	metrics.FindKeyHolderCountBucket.Observe(float64(len(holders)))
+
 	if len(holders) == 0 {
 		c.JSON(http.StatusNotFound,
 			gin.H{"message": fmt.Sprintf("Didn't find the key %s in piccolo", req.Key)},
