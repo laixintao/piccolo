@@ -61,15 +61,23 @@ func DoRequestWithRetry(
 			lastErr = err
 			fmt.Printf("[attempt %d] request error: %v\n", attempt, err)
 		} else {
-			if resp.StatusCode >= 500 {
+			switch {
+			case resp.StatusCode >= 500:
 				resp.Body.Close()
 				lastErr = fmt.Errorf("server error: %s", resp.Status)
 				fmt.Printf("[attempt %d] server error: %s\n", attempt, resp.Status)
-			} else if resp.StatusCode >= 400 {
+
+			case resp.StatusCode == http.StatusNotFound:
 				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
 				return nil, fmt.Errorf("url: %s, err: %w, respBody: %s", url, ErrNotFound, respBody)
-			} else {
+
+			case resp.StatusCode >= 400:
+				respBody, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				return nil, fmt.Errorf("client error: %s, body: %s", resp.Status, string(respBody))
+
+			default:
 				return resp, nil
 			}
 		}
