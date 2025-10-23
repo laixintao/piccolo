@@ -9,69 +9,50 @@ import (
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/plugin/dbresolver"
 )
 
-type DatabaseConfig struct {
-	Host            string
-	Port            int
-	User            string
-	Password        string
-	Database        string
-	Charset         string
-	ParseTime       bool
-	Loc             string
-	MaxIdleConns    int
-	MaxOpenConns    int
-	ConnMaxLifetime time.Duration
-	LogLevel        logger.LogLevel
-}
+const (
+	MaxIdleConns    = 10
+	MaxOpenConns    = 100
+	ConnMaxLifetime = time.Hour
+	LogLevel        = logger.Info
+)
 
-func DefaultDatabaseConfig() *DatabaseConfig {
-	return &DatabaseConfig{
-		Host:            "localhost",
-		Port:            3306,
-		User:            "root",
-		Password:        "",
-		Database:        "piccolo",
-		Charset:         "utf8mb4",
-		ParseTime:       true,
-		Loc:             "Local",
-		MaxIdleConns:    10,
-		MaxOpenConns:    100,
-		ConnMaxLifetime: time.Hour,
-		LogLevel:        logger.Info,
-	}
-}
 
-func (c *DatabaseConfig) BuildDSN() string {
-	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?charset=%s&parseTime=%t&loc=%s",
-		c.User,
-		c.Password,
-		c.Host,
-		c.Port,
-		c.Database,
-		c.Charset,
-		c.ParseTime,
-		c.Loc,
-	)
-}
 
-func InitMySQL(config *DatabaseConfig) (*gorm.DB, error) {
-	dsn := config.BuildDSN()
 
-	db, err := gorm.Open(mysql.Open(dsn), &gorm.Config{
+
+func InitMySQL(dbMaster string, dbSlaves []string) (*gorm.DB, error) {
+
+	db, err := gorm.Open(mysql.Open(dbMaster), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
 		NowFunc: func() time.Time {
 			return time.Now().Local()
 		},
 	})
-
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
+	if len(dbSlaves) > 0 {
+		var replicas []gorm.Dialector
+		for _, dsn := range dbSlaves {
+			replicas = append(replicas, mysql.Open(dsn))
+		}
+		// setup read replicas
+		if err := db.Use(dbresolver.Register(dbresolver.Config{
+			TraceResolverMode: true,
+			Policy:            dbresolver.RandomPolicy{},
+			Replicas:          replicas,
+		})); err != nil {
+			return nil, fmt.Errorf("failed to register dbresolver: %w", err)
+
+		}
+	}
+
 	if err := db.Use(prometheus.New(prometheus.Config{
-		DBName:          config.Database,
+		DBName:          "masterDB",
 		RefreshInterval: 15,
 		MetricsCollector: []prometheus.MetricsCollector{
 			&prometheus.MySQL{},
@@ -85,9 +66,9 @@ func InitMySQL(config *DatabaseConfig) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to get database instance: %w", err)
 	}
 
-	sqlDB.SetMaxIdleConns(config.MaxIdleConns)
-	sqlDB.SetMaxOpenConns(config.MaxOpenConns)
-	sqlDB.SetConnMaxLifetime(config.ConnMaxLifetime)
+	sqlDB.SetMaxIdleConns(MaxIdleConns)
+	sqlDB.SetMaxOpenConns(MaxOpenConns)
+	sqlDB.SetConnMaxLifetime(ConnMaxLifetime)
 
 	if err := sqlDB.Ping(); err != nil {
 		return nil, fmt.Errorf("failed to ping database: %w", err)

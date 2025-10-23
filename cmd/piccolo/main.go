@@ -29,13 +29,10 @@ var (
 type Arguments struct {
 	PiccoloAddress string     `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
 	LogLevel       slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
-	DBHost         string     `arg:"--db-host,env:DB_HOST" default:"localhost" help:"MySQL database host"`
-	DBPort         int        `arg:"--db-port,env:DB_PORT" default:"3306" help:"MySQL database port"`
-	DBUser         string     `arg:"--db-user,env:DB_USER" default:"root" help:"MySQL database user"`
-	DBPassword     string     `arg:"--db-password,env:DB_PASSWORD" default:"" help:"MySQL database password"`
-	DBName         string     `arg:"--db-name,env:DB_NAME" default:"piccolo" help:"MySQL database name"`
 	Version        bool       `arg:"-v,--version" help:"show version"`
 	MigrateDB      bool       `arg:"--migrate-db" help:"Auto change database's schema"`
+	DBMasterDSN    string     `arg:"--db-master-dsn,env:DB_MASTER_DSN,required" help:"Master db"`
+	DBSlavesDSN    []string   `arg:"--db-slaves-dsn,env:DB_SLAVES_DSN" help:"Slave dbs, can be multiple, if set, read requests will only be sent to slave db"`
 }
 
 func main() {
@@ -56,26 +53,13 @@ func main() {
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init, Piccolo started")
 
-	dbConfig := &storage.DatabaseConfig{
-		Host:         args.DBHost,
-		Port:         args.DBPort,
-		User:         args.DBUser,
-		Password:     args.DBPassword,
-		Database:     args.DBName,
-		Charset:      "utf8mb4",
-		ParseTime:    true,
-		Loc:          "Local",
-		MaxIdleConns: 10,
-		MaxOpenConns: 100,
-	}
-
-	db, err := storage.InitMySQL(dbConfig)
+	db, err := storage.InitMySQL(args.DBMasterDSN, args.DBSlavesDSN)
 	if err != nil {
 		log.Error(err, "failed to connect to MySQL database")
 		os.Exit(1)
 	}
 
-	log.Info("MySQL database connected", "host", args.DBHost, "database", args.DBName)
+	log.Info("MySQL database connected")
 
 	if args.MigrateDB {
 		log.Info("Now apply datbase migration (DDL)...")
