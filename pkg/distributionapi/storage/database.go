@@ -19,10 +19,6 @@ const (
 	LogLevel        = logger.Info
 )
 
-
-
-
-
 func InitMySQL(dbMaster string, dbSlaves []string) (*gorm.DB, error) {
 
 	db, err := gorm.Open(mysql.Open(dbMaster), &gorm.Config{
@@ -35,9 +31,42 @@ func InitMySQL(dbMaster string, dbSlaves []string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
+	if err := db.Use(prometheus.New(prometheus.Config{
+		DBName:          "masterDB",
+		RefreshInterval: 15,
+		MetricsCollector: []prometheus.MetricsCollector{
+			&prometheus.MySQL{},
+		},
+	})); err != nil {
+		return nil, fmt.Errorf("failed to initialize prometheus plugin: %w", err)
+	}
+
 	if len(dbSlaves) > 0 {
 		var replicas []gorm.Dialector
-		for _, dsn := range dbSlaves {
+		for slaveIndex, dsn := range dbSlaves {
+			replica := mysql.Open(dsn)
+			dbName := fmt.Sprintf("slave_%d", slaveIndex)
+
+			slaveDB, err := gorm.Open(replica, &gorm.Config{
+				Logger: logger.Default.LogMode(LogLevel),
+				NowFunc: func() time.Time {
+					return time.Now().Local()
+				},
+			})
+			if err != nil {
+				return nil, fmt.Errorf("failed to connect to slave %d: %w", slaveIndex, err)
+			}
+
+			if err := slaveDB.Use(prometheus.New(prometheus.Config{
+				DBName:          dbName,
+				RefreshInterval: 15,
+				MetricsCollector: []prometheus.MetricsCollector{
+					&prometheus.MySQL{},
+				},
+			})); err != nil {
+				return nil, fmt.Errorf("failed to register prometheus for slave %d: %w", slaveIndex, err)
+			}
+
 			replicas = append(replicas, mysql.Open(dsn))
 		}
 		// setup read replicas
@@ -47,18 +76,7 @@ func InitMySQL(dbMaster string, dbSlaves []string) (*gorm.DB, error) {
 			Replicas:          replicas,
 		})); err != nil {
 			return nil, fmt.Errorf("failed to register dbresolver: %w", err)
-
 		}
-	}
-
-	if err := db.Use(prometheus.New(prometheus.Config{
-		DBName:          "masterDB",
-		RefreshInterval: 15,
-		MetricsCollector: []prometheus.MetricsCollector{
-			&prometheus.MySQL{},
-		},
-	})); err != nil {
-		return nil, fmt.Errorf("failed to initialize prometheus plugin: %w", err)
 	}
 
 	sqlDB, err := db.DB()
