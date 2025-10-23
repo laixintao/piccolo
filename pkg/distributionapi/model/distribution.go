@@ -8,7 +8,7 @@ type Distribution struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
 	Key       string    `gorm:"size:255;uniqueIndex:idx_group_key_holder_uniq,priority:2" json:"key"`
 	Holder    string    `gorm:"size:64;uniqueIndex:idx_group_key_holder_uniq,priority:3;index:idx_holder" json:"holder"`
-	Group     string    `gorm:"size:64;uniqueIndex:idx_group_key_holder_uniq,priority:1 json:"group"`
+	Group     string    `gorm:"size:64;uniqueIndex:idx_group_key_holder_uniq,priority:1" json:"group"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -61,4 +61,5 @@ type FindKeyResponse struct {
 
 type KeepAliveRequest struct {
 	HostAddr string `json:"host" binding:"required"`
+	Group   string   `form:"group" binding:"required"`
 }

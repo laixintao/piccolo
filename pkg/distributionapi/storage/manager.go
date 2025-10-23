@@ -51,7 +51,7 @@ func (m *DistributionManager) GetHolderByKey(group string, key string) ([]string
 
 	var holders []string
 	query := m.db.Model(&model.Distribution{}).
-		Where("`key` = ? AND `group` = ?", key, group)
+		Where("`group` = ? AND `key` = ?", group, key)
 
 	if err := query.Pluck("holder", &holders).Error; err != nil {
 		return nil, fmt.Errorf("failed to get holders by key %s: %w", key, err)
@@ -60,7 +60,7 @@ func (m *DistributionManager) GetHolderByKey(group string, key string) ([]string
 	return holders, nil
 }
 
-func (m *DistributionManager) GetKeysByHolder(holder string) ([]string, error) {
+func (m *DistributionManager) GetKeysByHolder(group, holder string) ([]string, error) {
 	start := time.Now()
 	defer func() {
 		metrics.DBQueryTotal.WithLabelValues("get_keys_by_holder").Inc()
@@ -70,14 +70,14 @@ func (m *DistributionManager) GetKeysByHolder(holder string) ([]string, error) {
 	var keys []string
 	if err := m.db.
 		Model(&model.Distribution{}).
-		Where("holder = ?", holder).
+		Where("`holder` = ? AND `group` = ?", holder, group).
 		Pluck("`key`", &keys).Error; err != nil {
 		return nil, err
 	}
 	return keys, nil
 }
 
-func (m *DistributionManager) DeleteByKeysByHolder(keys []string, holder string) error {
+func (m *DistributionManager) DeleteByKeysByHolder(keys []string, holder, group string) error {
 	if len(keys) == 0 {
 		return nil
 	}
@@ -89,7 +89,7 @@ func (m *DistributionManager) DeleteByKeysByHolder(keys []string, holder string)
 	}()
 
 	return m.db.
-		Where("`key` IN ? AND holder = ?", keys, holder).
+		Where("`group` = ? AND `key` IN ? AND holder = ?", group, keys, holder).
 		Delete(&model.Distribution{}).Error
 }
 

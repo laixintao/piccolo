@@ -172,7 +172,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	existingKeys, err := h.m.GetKeysByHolder(req.Holder)
+	existingKeys, err := h.m.GetKeysByHolder(req.Group, req.Holder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
@@ -185,7 +185,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 	onlyInDB, onlyInRequest := diffSets(existingKeys, currentKeys)
 
 	if len(onlyInDB) != 0 {
-		if err := h.m.DeleteByKeysByHolder(onlyInDB, req.Holder); err != nil {
+		if err := h.m.DeleteByKeysByHolder(onlyInDB, req.Holder, req.Group); err != nil {
 			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 				Success: false,
 				Message: "Error when delete keys from DB",
