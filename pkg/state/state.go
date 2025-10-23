@@ -28,7 +28,6 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 	log.Info("Start periodic updates channel.", "durationMinutes", fullRefreshMinutes)
 
 	fullUpdatesCh := make(chan string, 10)
-	fullUpdatesCh <- "pi-start" // trigger full updates when pi agent starts
 	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
 
 	// random delay avoid all same Pi updates at the same time
@@ -248,7 +247,7 @@ func startKeepAlive(ctx context.Context, sd sd.ServiceDiscover) {
 	log := logr.FromContextOrDiscard(ctx)
 	rand.Seed(time.Now().UnixNano())
 	resetInMinutes := rand.Int63n(HEART_BEAT_INTERVAL_MINUTE)
-	log.Info("Heart beat timer will reset in", "minutes", resetInMinutes)
+	log.Info("Heart beat timer will reset in", "minutes", resetInMinutes, "HEART_BEAT_INTERVAL_MINUTE", HEART_BEAT_INTERVAL_MINUTE)
 
 	select {
 	case <-time.After(time.Duration(resetInMinutes) * time.Minute):
