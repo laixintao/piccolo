@@ -3,11 +3,14 @@ package httputils
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"time"
 )
+
+var ErrNotFound = errors.New("404 not found")
 
 func DoRequestWithRetry(
 	ctx context.Context,
@@ -65,7 +68,7 @@ func DoRequestWithRetry(
 			} else if resp.StatusCode >= 400 {
 				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
-				return nil, fmt.Errorf("client error: %s, body: %s", resp.Status, string(respBody))
+				return nil, fmt.Errorf("url: %s, err: %w, respBody: %s", url, ErrNotFound, respBody)
 			} else {
 				return resp, nil
 			}

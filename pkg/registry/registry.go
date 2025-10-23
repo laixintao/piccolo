@@ -16,6 +16,7 @@ import (
 	"github.com/go-logr/logr"
 
 	"github.com/laixintao/piccolo/internal/buffer"
+	"github.com/laixintao/piccolo/internal/httputils"
 	"github.com/laixintao/piccolo/internal/mux"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/sd"
@@ -26,14 +27,14 @@ const (
 )
 
 type Registry struct {
-	bufferPool           *buffer.BufferPool
-	log                  logr.Logger
-	sd                   sd.ServiceDiscover
-	transport            http.RoundTripper
-	resolveRetries       int
-	resolveTimeout       time.Duration
-	resolveLatestTag     bool
-	semaphore            chan struct{}
+	bufferPool       *buffer.BufferPool
+	log              logr.Logger
+	sd               sd.ServiceDiscover
+	transport        http.RoundTripper
+	resolveRetries   int
+	resolveTimeout   time.Duration
+	resolveLatestTag bool
+	semaphore        chan struct{}
 }
 
 type Option func(*Registry)
@@ -147,7 +148,7 @@ func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 
 	// Parse out path components from request.
 	originalRegistry := req.URL.Query().Get("ns")
-	r.log.Info("request v2 registry", "path", req.URL, "method" , req.Method)
+	r.log.Info("request v2 registry", "path", req.URL, "method", req.Method)
 	ref, err := parsePathComponents(originalRegistry, req.URL.Path)
 	if err != nil {
 		rw.WriteError(http.StatusNotFound, fmt.Errorf("could not parse path according to OCI distribution spec: %w", err))
@@ -193,7 +194,12 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 	defer cancel()
 	resolveCtx = logr.NewContext(resolveCtx, log)
 	peers, err := r.sd.Resolve(resolveCtx, key, r.resolveRetries)
+
 	if err != nil {
+		if errors.Is(err, httputils.ErrNotFound) {
+			rw.WriteError(http.StatusNotFound, err)
+			return
+		}
 		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("error occurred when attempting to resolve mirrors: %w", err))
 		return
 	}

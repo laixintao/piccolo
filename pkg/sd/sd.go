@@ -208,7 +208,7 @@ func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
 	url.Path = path.Join(url.Path, "api", "v1", "keepalive")
 	request := model.KeepAliveRequest{
 		HostAddr: p.piAddr,
-		Group: p.group
+		Group: p.group,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
