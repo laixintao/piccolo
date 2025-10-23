@@ -19,7 +19,8 @@ func (Distribution) TableName() string {
 
 type Host struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	HostAddr  string    `gorm:"size:64;uniqueIndex:idx_host" json:"host_addr"`
+	HostAddr  string    `gorm:"size:64;uniqueIndex:idx_group_host,priority:2" json:"host_addr"`
+	Group     string    `gorm:"size:64;uniqueIndex:idx_group_host,priority:1" json:"group"`
 	LastSeen  time.Time `json:"last_seen"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
@@ -61,5 +62,5 @@ type FindKeyResponse struct {
 
 type KeepAliveRequest struct {
 	HostAddr string `json:"host" binding:"required"`
-	Group   string   `form:"group" binding:"required"`
+	Group    string `form:"group" binding:"required"`
 }

@@ -354,7 +354,7 @@ func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 		})
 	}
 
-	if err := h.m.RefreshHostAddr(req.HostAddr); err != nil {
+	if err := h.m.RefreshHostAddr(req.HostAddr, req.Group); err != nil {
 		h.log.Error(err, "Failed to refresh host Addr!", "host_addr", req.HostAddr)
 		c.JSON(http.StatusInternalServerError, model.KeepAliveResponse{
 			Success: false,

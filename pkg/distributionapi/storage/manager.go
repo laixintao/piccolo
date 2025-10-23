@@ -106,7 +106,7 @@ func (m *DistributionManager) Close() error {
 	return nil
 }
 
-func (m *DistributionManager) RefreshHostAddr(hostAddr string) error {
+func (m *DistributionManager) RefreshHostAddr(hostAddr, group string) error {
 	start := time.Now()
 	defer func() {
 		metrics.DBQueryTotal.WithLabelValues("refresh_host_addr").Inc()
@@ -116,11 +116,12 @@ func (m *DistributionManager) RefreshHostAddr(hostAddr string) error {
 	now := time.Now()
 	host := &model.Host{
 		HostAddr: hostAddr,
+		Group:    group,
 		LastSeen: now,
 	}
 
 	return m.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "host_addr"}},
+		Columns:   []clause.Column{{Name: "host_addr"}, {Name: "group"}},
 		DoUpdates: clause.AssignmentColumns([]string{"last_seen"}),
 	}).Create(host).Error
 }
