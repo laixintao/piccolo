@@ -41,32 +41,10 @@ func InitMySQL(dbMaster string, dbSlaves []string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to initialize prometheus plugin: %w", err)
 	}
 
+	// enable read/write split
 	if len(dbSlaves) > 0 {
 		var replicas []gorm.Dialector
-		for slaveIndex, dsn := range dbSlaves {
-			replica := mysql.Open(dsn)
-			dbName := fmt.Sprintf("slave_%d", slaveIndex)
-
-			slaveDB, err := gorm.Open(replica, &gorm.Config{
-				Logger: logger.Default.LogMode(LogLevel),
-				NowFunc: func() time.Time {
-					return time.Now().Local()
-				},
-			})
-			if err != nil {
-				return nil, fmt.Errorf("failed to connect to slave %d: %w", slaveIndex, err)
-			}
-
-			if err := slaveDB.Use(prometheus.New(prometheus.Config{
-				DBName:          dbName,
-				RefreshInterval: 15,
-				MetricsCollector: []prometheus.MetricsCollector{
-					&prometheus.MySQL{},
-				},
-			})); err != nil {
-				return nil, fmt.Errorf("failed to register prometheus for slave %d: %w", slaveIndex, err)
-			}
-
+		for _, dsn := range dbSlaves {
 			replicas = append(replicas, mysql.Open(dsn))
 		}
 		// setup read replicas
