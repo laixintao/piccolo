@@ -102,10 +102,10 @@ func DoRequestWithRetry(
 		case <-time.After(backoff):
 		}
 
-		if backoff < INITIAL_BACKOFF {
+		if backoff < MAX_BACKOFF {
 			backoff *= 2
-			if backoff > INITIAL_BACKOFF {
-				backoff = INITIAL_BACKOFF
+			if backoff > MAX_BACKOFF {
+				backoff = MAX_BACKOFF
 			}
 		}
 	}
