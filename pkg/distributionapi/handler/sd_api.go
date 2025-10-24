@@ -355,6 +355,7 @@ func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 			Success: false,
 			Message: "Wrong request format: " + err.Error(),
 		})
+		return
 	}
 
 	if err := h.m.RefreshHostAddr(req.HostAddr, req.Group); err != nil {
