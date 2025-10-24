@@ -27,7 +27,7 @@ var (
 
 	FindKeyHolderCountBucket = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
-			Name:    "piccolo_api_findkey_db_result_count_bucket",
+			Name:    "piccolo_api_findkey_db_result_count",
 			Help:    "Findkey get how many results from db",
 			Buckets: []float64{10, 100, 200, 300, 500, 1000, 2000, 3000, 5000, 100000},
 		},
