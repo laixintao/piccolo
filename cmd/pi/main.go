@@ -45,7 +45,7 @@ type Arguments struct {
 	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" help:"pi will update all image states to piccolo for every X minutes."`
 	MaxUploadConnections        int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
 	MaxUploadBlobBytesPerSecond float64       `arg:"--max-upload-blob-bytes-per-second,env:PI_MAX_UPLOAD_BLOB_BYTES_PER_SECOND" default:"1073741824" help:"Max upload speed limition for upload blobs to other pi nodes."`
-	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"20ms" help:"Max duration spent finding a mirror."`
+	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"2s" help:"Max duration spent finding a mirror."`
 	MirrorResolveRetries        int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
 	Group                       string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
 	Version                     bool          `arg:"-v,--version" help:"show version"`

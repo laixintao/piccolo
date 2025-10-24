@@ -3,6 +3,7 @@ package sd
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -88,9 +89,8 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
 		},
-		60*time.Second,
-		1*time.Second,
 		10*time.Second,
+		60*time.Second,
 		p.httpClient,
 	)
 	if err != nil {
@@ -111,6 +111,8 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 
 func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error) {
 	p.log.Info("Resolve key", "key", key, "count", count)
+	deadline, _ := ctx.Deadline()
+	fmt.Printf("Enter resolve key The context left %s \n", deadline)
 	log := logr.FromContextOrDiscard(ctx)
 	u := p.piccoloAddress
 	u.Path = path.Join(u.Path, "api", "v1", "distribution", "findkey")
@@ -129,9 +131,8 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 		map[string]string{
 			"Accept": "application/json",
 		},
-		5*time.Second,
 		1*time.Second,
-		3*time.Second,
+		5*time.Second,
 		p.httpClient,
 	)
 	resolveTimer.ObserveDuration()
@@ -181,9 +182,8 @@ func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
 		},
-		90*time.Second,
-		1*time.Second,
 		10*time.Second,
+		90*time.Second,
 		p.httpClient,
 	)
 	if err != nil {
@@ -222,7 +222,6 @@ func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
 			"Content-Type": "application/json",
 			"Accept":       "application/json",
 		},
-		30*time.Second,
 		1*time.Second,
 		10*time.Second,
 		p.httpClient,

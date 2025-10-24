@@ -106,15 +106,9 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	// Get limited holders if count is specified
-	var holders []string
-	limit := 100
-	if req.Count > 0 {
-		limit = req.Count
-	}
 	holders, err := h.m.GetHolderByKey(ctx, req.Group, req.Key)
 	if err != nil {
-		h.log.Error(err, "failed to get holders by key with limit", "key", req.Key, "count", req.Count)
+		h.log.Error(err, "failed to get holders by key", "key", req.Key)
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": "Error when finding holders: " + err.Error(),
 		})
@@ -147,6 +141,11 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 
 	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "queryed_from_db", len(holders), "sort_cost_seconds", sortDuration)
 
+	// Get limited holders if count is specified
+	limit := 100
+	if req.Count > 0 {
+		limit = req.Count
+	}
 	if limit > len(sorted) {
 		limit = len(sorted)
 	}

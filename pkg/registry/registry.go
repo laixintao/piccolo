@@ -68,7 +68,7 @@ func NewRegistry(sd sd.ServiceDiscover, log logr.Logger, opts ...Option) *Regist
 		sd:               sd,
 		log:              log,
 		resolveRetries:   3,
-		resolveTimeout:   20 * time.Millisecond,
+		resolveTimeout:   2 * time.Second,
 		resolveLatestTag: true,
 		bufferPool:       buffer.NewBufferPool(),
 	}
