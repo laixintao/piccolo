@@ -59,8 +59,8 @@ func (m *HostManager) FindDeadHosts() ([]model.Host, error) {
 func (m *HostManager) DeleteHost(host model.Host) error {
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_host").Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_host").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "delete_host").Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "delete_host").Observe(time.Since(start).Seconds())
 	}()
 
 	if err := m.db.
