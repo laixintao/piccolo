@@ -19,7 +19,14 @@ const (
 func StartEvictor(ctx context.Context, m *storage.Manager) error {
 	log := logr.FromContextOrDiscard(ctx)
 
+	// at least wait for 10 minutes, in case that:
+	// api down
+	// api started
+	// then start to delete all the hosts...
+	// so we wait at least a EVICTORCHECKTIME, to give all hosts one chance
+	// to register themself
 	sleepDuration := randduration.RandomDuration(EVICTORCHECKTIME)
+	sleepDuration += EVICTORCHECKTIME
 	log.Info("Healthcheck will be reset in", "sleepDuration", sleepDuration, "EVICTORCHECKTIME", EVICTORCHECKTIME)
 
 	select {
