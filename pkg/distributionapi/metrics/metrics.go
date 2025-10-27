@@ -33,10 +33,15 @@ var (
 		},
 	)
 
-	EvictorTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+	EvictorRunTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "piccolo_evictor_run_total",
 		Help: "Total number of evictor has been triggered",
 	}, []string{})
+	EvictorDeletedHostTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "piccolo_evictor_deleted_host_total",
+		Help: "Dead hosts total, being deleted",
+	}, []string{})
+
 	EvictorDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "piccolo_evictor_duration_seconds",
 		Help: "Duration of evictor run",
@@ -47,6 +52,7 @@ func Register() {
 	DefaultRegisterer.MustRegister(DBQueryTotal)
 	DefaultRegisterer.MustRegister(DBQueryDuration)
 	DefaultRegisterer.MustRegister(FindKeyHolderCountBucket)
-	DefaultRegisterer.MustRegister(EvictorTotal)
+	DefaultRegisterer.MustRegister(EvictorRunTotal)
 	DefaultRegisterer.MustRegister(EvictorDuration)
+	DefaultRegisterer.MustRegister(EvictorDeletedHostTotal)
 }

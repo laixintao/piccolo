@@ -52,7 +52,7 @@ func StartEvictor(ctx context.Context, m *storage.Manager) error {
 }
 
 func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
-	metrics.EvictorTotal.WithLabelValues().Inc()
+	metrics.EvictorRunTotal.WithLabelValues().Inc()
 	start := time.Now()
 	defer func() {
 		metrics.EvictorDuration.WithLabelValues().Observe(time.Since(start).Seconds())
@@ -65,6 +65,7 @@ func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
 	}
 
 	for _, dh := range deadHosts {
+		metrics.EvictorDeletedHostTotal.WithLabelValues().Inc()
 		log.Info("Evict dead host", "host", dh)
 		err := m.Distribution.DeleteByHolder(dh)
 		if err != nil {
