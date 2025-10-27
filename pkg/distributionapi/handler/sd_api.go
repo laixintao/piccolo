@@ -16,11 +16,11 @@ import (
 )
 
 type DistributionHandler struct {
-	m   *storage.DistributionManager
+	m   *storage.Manager
 	log logr.Logger
 }
 
-func NewDistributionHandler(m *storage.DistributionManager, log logr.Logger) *DistributionHandler {
+func NewDistributionHandler(m *storage.Manager, log logr.Logger) *DistributionHandler {
 	return &DistributionHandler{
 		m:   m,
 		log: log,
@@ -68,7 +68,7 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		return
 	}
 
-	if err := h.m.CreateDistributions(distributions); err != nil {
+	if err := h.m.Distribution.CreateDistributions(distributions); err != nil {
 		h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
@@ -106,7 +106,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	holders, err := h.m.GetHolderByKey(ctx, req.Group, req.Key)
+	holders, err := h.m.Distribution.GetHolderByKey(ctx, req.Group, req.Key)
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key", "key", req.Key)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -179,7 +179,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		return
 	}
 
-	existingKeys, err := h.m.GetKeysByHolder(req.Group, req.Holder)
+	existingKeys, err := h.m.Distribution.GetKeysByHolder(req.Group, req.Holder)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
@@ -192,7 +192,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 	onlyInDB, onlyInRequest := diffSets(existingKeys, currentKeys)
 
 	if len(onlyInDB) != 0 {
-		if err := h.m.DeleteByKeysByHolder(onlyInDB, req.Holder, req.Group); err != nil {
+		if err := h.m.Distribution.DeleteByKeysByHolder(onlyInDB, req.Holder, req.Group); err != nil {
 			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 				Success: false,
 				Message: "Error when delete keys from DB",
@@ -214,7 +214,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 			})
 		}
 
-		if err := h.m.CreateDistributions(distributions); err != nil {
+		if err := h.m.Distribution.CreateDistributions(distributions); err != nil {
 			h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
 			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 				Success: false,
@@ -358,7 +358,7 @@ func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 		return
 	}
 
-	if err := h.m.RefreshHostAddr(req.HostAddr, req.Group); err != nil {
+	if err := h.m.Host.RefreshHostAddr(req.HostAddr, req.Group); err != nil {
 		h.log.Error(err, "Failed to refresh host Addr!", "host_addr", req.HostAddr)
 		c.JSON(http.StatusInternalServerError, model.KeepAliveResponse{
 			Success: false,

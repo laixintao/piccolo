@@ -73,9 +73,9 @@ func main() {
 
 	log.Info("database migration completed successfully")
 
-	distributionManager := storage.NewDistributionManager(db)
-	distributionHandler := distributionHandler.NewDistributionHandler(distributionManager, log)
-	defer distributionManager.Close()
+	dbm := storage.NewManager(db)
+	distributionHandler := distributionHandler.NewDistributionHandler(dbm, log)
+	defer dbm.Close()
 
 	log.Info("image store initialized")
 
@@ -124,7 +124,7 @@ func main() {
 	log.Info("server starting", "piccolo-address", args.PiccoloAddress)
 
 	ctx := logr.NewContext(context.Background(), log)
-	go evictor.StartEvictor(ctx, distributionManager)
+	go evictor.StartEvictor(ctx, dbm)
 
 	// Start server with configured host and port
 	if err := r.Run(args.PiccoloAddress); err != nil {

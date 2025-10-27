@@ -5,9 +5,9 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/laixintao/piccolo/internal/randduration"
 	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
-	"github.com/laixintao/piccolo/internal/randduration"
 )
 
 const (
@@ -16,7 +16,7 @@ const (
 
 // If server not report health over 10 minutes, delete it
 // from host_tab and distribution_tab
-func StartEvictor(ctx context.Context, dm *storage.DistributionManager) error {
+func StartEvictor(ctx context.Context, m *storage.Manager) error {
 	log := logr.FromContextOrDiscard(ctx)
 
 	sleepDuration := randduration.RandomDuration(EVICTORCHECKTIME)
@@ -30,7 +30,7 @@ func StartEvictor(ctx context.Context, dm *storage.DistributionManager) error {
 	}
 
 	log.Info("First healthcheck starts, then trigger for every", "minutes", EVICTORCHECKTIME)
-	if err := evictDeadHosts(ctx, dm); err != nil {
+	if err := evictDeadHosts(ctx, m); err != nil {
 		log.Error(err, "Error when do keepalive")
 	}
 
@@ -42,7 +42,7 @@ func StartEvictor(ctx context.Context, dm *storage.DistributionManager) error {
 		select {
 		case <-keepaliveTicker.C:
 			log.Info("By Ticker: Running Evictor...")
-			if err := evictDeadHosts(ctx, dm); err != nil {
+			if err := evictDeadHosts(ctx, m); err != nil {
 				log.Error(err, "Error when do keepalive")
 			}
 		case <-ctx.Done():
@@ -51,7 +51,7 @@ func StartEvictor(ctx context.Context, dm *storage.DistributionManager) error {
 	}
 }
 
-func evictDeadHosts(ctx context.Context, m *storage.DistributionManager) error {
+func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
 	metrics.EvictorTotal.WithLabelValues().Inc()
 	start := time.Now()
 	defer func() {
@@ -59,19 +59,19 @@ func evictDeadHosts(ctx context.Context, m *storage.DistributionManager) error {
 
 	}()
 	log := logr.FromContextOrDiscard(ctx)
-	deadHosts, err := m.FindDeadHosts()
+	deadHosts, err := m.Host.FindDeadHosts()
 	if err != nil {
 		return err
 	}
 
 	for _, dh := range deadHosts {
 		log.Info("Evict dead host", "host", dh)
-		err := m.DeleteByHolder(dh)
+		err := m.Distribution.DeleteByHolder(dh)
 		if err != nil {
 			log.Error(err, "Error when delete distributions by holder", "holder", dh)
 			continue
 		}
-		err = m.DeleteHost(dh)
+		err = m.Distribution.DeleteHost(dh)
 		if err != nil {
 			log.Error(err, "Error when delete Hosts by host_tab", "holder", dh)
 			continue
