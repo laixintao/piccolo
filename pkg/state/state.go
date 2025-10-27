@@ -4,20 +4,20 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math/rand"
 	"time"
 
 	"github.com/go-logr/logr"
 
+	"github.com/laixintao/piccolo/internal/randduration"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/oci"
 	"github.com/laixintao/piccolo/pkg/sd"
 )
 
 const (
-	FULLUPDATE_WAITTIME        = 60 * time.Second
-	MAX_DELETION_EVENTS        = 100
-	HEART_BEAT_INTERVAL_MINUTE = 10
+	FULLUPDATE_WAITTIME = 60 * time.Second
+	HEART_BEAT_INTERVAL = 10 * time.Minute
+	MAX_DELETION_EVENTS = 100
 )
 
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
@@ -214,12 +214,12 @@ func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ev
 
 func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh chan<- string) {
 	log := logr.FromContextOrDiscard(ctx)
-	rand.Seed(time.Now().UnixNano())
-	resetInMinutes := rand.Int63n(intervalMinutes)
-	log.Info("fullUpdatesTimer will be reset in minutes", "minutes", resetInMinutes)
+	interval := time.Duration(intervalMinutes) * time.Minute
+	sleepDuration := randduration.RandomDuration(interval)
+	log.Info("fullUpdatesTimer will be reset in minutes", "minutes", sleepDuration)
 
 	select {
-	case <-time.After(time.Duration(resetInMinutes) * time.Minute):
+	case <-time.After(sleepDuration):
 		log.Info("Interval update first trigger wait period over.")
 	case <-ctx.Done():
 		return
@@ -229,7 +229,7 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 	fullUpdatesCh <- "ticker"
 
 	// update for const interval
-	expirationTicker := time.NewTicker(time.Duration(intervalMinutes) * time.Minute)
+	expirationTicker := time.NewTicker(interval)
 	defer expirationTicker.Stop()
 
 	for {
@@ -245,24 +245,23 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 
 func startKeepAlive(ctx context.Context, sd sd.ServiceDiscover) {
 	log := logr.FromContextOrDiscard(ctx)
-	rand.Seed(time.Now().UnixNano())
-	resetInMinutes := rand.Int63n(HEART_BEAT_INTERVAL_MINUTE)
-	log.Info("Heart beat timer will reset in", "minutes", resetInMinutes, "HEART_BEAT_INTERVAL_MINUTE", HEART_BEAT_INTERVAL_MINUTE)
+	sleepDuration := randduration.RandomDuration(HEART_BEAT_INTERVAL)
+	log.Info("Heart beat timer will reset in", "minutes", sleepDuration, "HEART_BEAT_INTERVAL", HEART_BEAT_INTERVAL)
 
 	select {
-	case <-time.After(time.Duration(resetInMinutes) * time.Minute):
+	case <-time.After(sleepDuration):
 		log.Info("Heart beat first trigger wait period over.")
 	case <-ctx.Done():
 		return
 	}
 
-	log.Info("First heart beat starts, then trigger for every", "minutes", HEART_BEAT_INTERVAL_MINUTE)
+	log.Info("First heart beat starts, then trigger for every", "duration", HEART_BEAT_INTERVAL)
 	if err := sd.DoKeepAlive(ctx); err != nil {
 		log.Error(err, "Error when do keepalive")
 	}
 
 	// update for const interval
-	keepaliveTicker := time.NewTicker(time.Duration(HEART_BEAT_INTERVAL_MINUTE) * time.Minute)
+	keepaliveTicker := time.NewTicker(HEART_BEAT_INTERVAL)
 	defer keepaliveTicker.Stop()
 
 	for {

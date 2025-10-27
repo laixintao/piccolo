@@ -2,12 +2,12 @@ package evictor
 
 import (
 	"context"
-	"math/rand"
 	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
+	"github.com/laixintao/piccolo/internal/randduration"
 )
 
 const (
@@ -18,11 +18,12 @@ const (
 // from host_tab and distribution_tab
 func StartEvictor(ctx context.Context, dm *storage.DistributionManager) error {
 	log := logr.FromContextOrDiscard(ctx)
-	resetInMinutes := rand.Int63n(int64(EVICTORCHECKTIME))
-	log.Info("Healthcheck will be reset in", "minutes", resetInMinutes, "EVICTORCHECKTIME", EVICTORCHECKTIME)
+
+	sleepDuration := randduration.RandomDuration(EVICTORCHECKTIME)
+	log.Info("Healthcheck will be reset in", "sleepDuration", sleepDuration, "EVICTORCHECKTIME", EVICTORCHECKTIME)
 
 	select {
-	case <-time.After(time.Duration(resetInMinutes) * time.Minute):
+	case <-time.After(sleepDuration):
 		log.Info("Heart beat first trigger wait period over.")
 	case <-ctx.Done():
 		return nil
