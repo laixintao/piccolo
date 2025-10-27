@@ -32,10 +32,21 @@ var (
 			Buckets: []float64{10, 100, 200, 300, 500, 1000, 2000, 3000, 5000, 100000},
 		},
 	)
+
+	EvictorTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "piccolo_evictor_run_total",
+		Help: "Total number of evictor has been triggered",
+	}, []string{})
+	EvictorDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Name: "piccolo_evictor_duration_seconds",
+		Help: "Duration of evictor run",
+	}, []string{})
 )
 
 func Register() {
 	DefaultRegisterer.MustRegister(DBQueryTotal)
 	DefaultRegisterer.MustRegister(DBQueryDuration)
 	DefaultRegisterer.MustRegister(FindKeyHolderCountBucket)
+	DefaultRegisterer.MustRegister(EvictorTotal)
+	DefaultRegisterer.MustRegister(EvictorDuration)
 }

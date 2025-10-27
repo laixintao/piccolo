@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/pprof"
@@ -11,6 +12,7 @@ import (
 	"github.com/alexflint/go-arg"
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
+	"github.com/laixintao/piccolo/pkg/distributionapi/evictor"
 	distributionHandler "github.com/laixintao/piccolo/pkg/distributionapi/handler"
 	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/middleware"
@@ -120,6 +122,9 @@ func main() {
 	}
 
 	log.Info("server starting", "piccolo-address", args.PiccoloAddress)
+
+	ctx := logr.NewContext(context.Background(), log)
+	go evictor.StartEvictor(ctx, distributionManager)
 
 	// Start server with configured host and port
 	if err := r.Run(args.PiccoloAddress); err != nil {

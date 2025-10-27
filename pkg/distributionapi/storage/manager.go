@@ -130,3 +130,54 @@ func (m *DistributionManager) RefreshHostAddr(hostAddr, group string) error {
 		DoUpdates: clause.AssignmentColumns([]string{"last_seen"}),
 	}).Create(host).Error
 }
+
+func (m *DistributionManager) FindDeadHosts() ([]model.Host, error) {
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("find_dead_hosts").Inc()
+		metrics.DBQueryDuration.WithLabelValues("find_dead_hosts").Observe(time.Since(start).Seconds())
+	}()
+
+	threshold := time.Now().Add(-10 * time.Minute)
+	var deadHosts []model.Host
+	if err := m.db.
+		Model(&model.Host{}).
+		Where("last_seen < ?", threshold).
+		Find(&deadHosts).Error; err != nil {
+		return nil, fmt.Errorf("failed to find dead hosts: %w", err)
+	}
+
+	return deadHosts, nil
+}
+
+func (m *DistributionManager) DeleteByHolder(host model.Host) error {
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("delete_by_holder").Inc()
+		metrics.DBQueryDuration.WithLabelValues("delete_by_holder").Observe(time.Since(start).Seconds())
+	}()
+
+	if err := m.db.
+		Where("`holder` = ? AND `group` = ?", host.HostAddr, host.Group).
+		Delete(&model.Distribution{}).Error; err != nil {
+		return fmt.Errorf("failed to delete distributions for holder %s (group=%s): %w",
+			host.HostAddr, host.Group, err)
+	}
+	return nil
+}
+
+func (m *DistributionManager) DeleteHost(host model.Host) error {
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("delete_host").Inc()
+		metrics.DBQueryDuration.WithLabelValues("delete_host").Observe(time.Since(start).Seconds())
+	}()
+
+	if err := m.db.
+		Where("`host_addr` = ? AND `group` = ?", host.HostAddr, host.Group).
+		Delete(&model.Host{}).Error; err != nil {
+		return fmt.Errorf("failed to delete host %s (group=%s): %w",
+			host.HostAddr, host.Group, err)
+	}
+	return nil
+}
