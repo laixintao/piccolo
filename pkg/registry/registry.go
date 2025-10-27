@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/netip"
@@ -76,9 +77,12 @@ func NewRegistry(sd sd.ServiceDiscover, log logr.Logger, opts ...Option) *Regist
 		opt(r)
 	}
 	if r.transport == nil {
-		//nolint: errcheck // Ignore
 		transport := http.DefaultTransport.(*http.Transport).Clone()
 		transport.MaxIdleConnsPerHost = 100
+		transport.DialContext = (&net.Dialer{
+			Timeout:   5 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext
 		r.transport = transport
 	}
 	return r
