@@ -101,18 +101,3 @@ func (m *DistributionManager) DeleteByHolder(host model.Host) error {
 	return nil
 }
 
-func (m *DistributionManager) DeleteHost(host model.Host) error {
-	start := time.Now()
-	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_host").Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_host").Observe(time.Since(start).Seconds())
-	}()
-
-	if err := m.db.
-		Where("`host_addr` = ? AND `group` = ?", host.HostAddr, host.Group).
-		Delete(&model.Host{}).Error; err != nil {
-		return fmt.Errorf("failed to delete host %s (group=%s): %w",
-			host.HostAddr, host.Group, err)
-	}
-	return nil
-}

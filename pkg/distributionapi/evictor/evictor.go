@@ -72,7 +72,7 @@ func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
 			log.Error(err, "Error when delete distributions by holder", "holder", dh)
 			continue
 		}
-		err = m.Distribution.DeleteHost(dh)
+		err = m.Host.DeleteHost(dh)
 		if err != nil {
 			log.Error(err, "Error when delete Hosts by host_tab", "holder", dh)
 			continue
