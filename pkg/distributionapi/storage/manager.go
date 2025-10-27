@@ -11,7 +11,10 @@ import (
 	"gorm.io/gorm/clause"
 )
 
-const MaxBatch = 100
+const (
+	MaxBatch          = 100
+	FindKeyMaxResults = 2000
+)
 
 type DistributionManagerInterface interface {
 	CreateDistributions(distributions []*model.Distribution) error
@@ -52,7 +55,8 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, 
 
 	var holders []string
 	query := m.db.WithContext(ctx).Model(&model.Distribution{}).
-		Where("`group` = ? AND `key` = ?", group, key)
+		Where("`group` = ? AND `key` = ?", group, key).
+		Limit(FindKeyMaxResults)
 
 	if err := query.Pluck("holder", &holders).Error; err != nil {
 		return nil, fmt.Errorf("failed to get holders by key %s: %w", key, err)
