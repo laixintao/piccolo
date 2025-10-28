@@ -112,6 +112,7 @@ func (c *Containerd) Verify(ctx context.Context) error {
 }
 
 func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan error, <-chan error, error) {
+	log := logr.FromContextOrDiscard(ctx)
 	imgCh := make(chan ImageEvent)
 	errCh := make(chan error)
 	client, err := c.Client()
@@ -124,35 +125,45 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 			close(imgCh)
 			close(errCh)
 		}()
-		for envelope := range envelopeCh {
-			var img Image
-			imageName, eventType, err := getEventImage(envelope.Event)
-			if err != nil {
-				errCh <- err
-				continue
-			}
-			switch eventType {
-			case CreateEvent, UpdateEvent:
-				cImg, err := client.GetImage(ctx, imageName)
+		for {
+			select {
+			case <-ctx.Done():
+				log.Info("ctx done, return from subscriber")
+				return
+			case envelope, ok := <-envelopeCh:
+				if !ok {
+					log.Info("envelopeCh closed")
+					return
+				}
+				var img Image
+				imageName, eventType, err := getEventImage(envelope.Event)
 				if err != nil {
 					errCh <- err
 					continue
 				}
-				img, err = Parse(cImg.Name(), cImg.Target().Digest)
-				if err != nil {
-					errCh <- err
-					continue
+				switch eventType {
+				case CreateEvent, UpdateEvent:
+					cImg, err := client.GetImage(ctx, imageName)
+					if err != nil {
+						errCh <- err
+						continue
+					}
+					img, err = Parse(cImg.Name(), cImg.Target().Digest)
+					if err != nil {
+						errCh <- err
+						continue
+					}
+				case DeleteEvent:
+					// in DeleteEvent, containerd won't tell us the image digest
+					// we also can not walk this image, so it will trigger a full
+					// update event
+					log := logr.FromContextOrDiscard(ctx)
+					log.Info("Delete image", "imageName", imageName)
 				}
-			case DeleteEvent:
-				// in DeleteEvent, containerd won't tell us the image digest
-				// we also can not walk this image, so it will trigger a full
-				// update event
-				log := logr.FromContextOrDiscard(ctx)
-				log.Info("Delete image", "imageName", imageName)
-			}
-			imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}
-		}
-	}()
+				imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}
+			} // select
+		} // for
+	}() // goroutine
 	return imgCh, errCh, cErrCh, nil
 }
 
