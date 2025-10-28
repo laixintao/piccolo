@@ -35,7 +35,9 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 	go startKeepAlive(ctx, sd)
 
 	for {
-		eventCh, errCh, err := ociClient.Subscribe(ctx)
+		ociCtx, calcenOciClient := context.WithCancel(ctx)
+		eventCh, errCh, cErrCh, err := ociClient.Subscribe(ociCtx)
+
 		metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
 		if err != nil {
 			metrics.ContainerdSubscribeTotal.WithLabelValues("fail").Add(1)
@@ -67,17 +69,27 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 						log.Error(err, "received error when updating image")
 						continue
 					}
+				// SDK error, can not found image, in this case, no need to
+				// restart the subscribe
 				case err, ok := <-errCh:
+					if !ok {
+						log.Info("errCh closed, restart the subscriber")
+						break SubscribeLoop
+					}
+					log.Error(err, "error event from subscriber (errCh)")
+					continue
+				case err, ok := <-cErrCh:
 					if !ok {
 						log.Info("errCh closed, restart the subscriber")
 						break SubscribeLoop
 					}
 					log.Error(err, "event channel error, restart the subscriber.")
 					break SubscribeLoop
-				}
+				} // select
 			} // subscribe for
 		}
 
+		calcenOciClient()
 		log.Info("the subscriber need to be restarted, but I'll wait 3 seconds...")
 
 		select {

@@ -25,7 +25,7 @@ type Client interface {
 	Verify(ctx context.Context) error
 
 	// Subscribe will notify for any image events ocuring in the store backend.
-	Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan error, error)
+	Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan error, <-chan error, error)
 
 	// ListImages returns a list of all local images.
 	ListImages(ctx context.Context) ([]Image, error)

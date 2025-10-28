@@ -22,8 +22,6 @@ import (
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
-
-	"github.com/laixintao/piccolo/internal/channel"
 )
 
 const (
@@ -113,12 +111,12 @@ func (c *Containerd) Verify(ctx context.Context) error {
 	return nil
 }
 
-func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan error, error) {
+func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan error, <-chan error, error) {
 	imgCh := make(chan ImageEvent)
 	errCh := make(chan error)
 	client, err := c.Client()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
 	envelopeCh, cErrCh := client.EventService().Subscribe(ctx, c.eventFilter)
 	go func() {
@@ -155,7 +153,7 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 			imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}
 		}
 	}()
-	return imgCh, channel.Merge(errCh, cErrCh), nil
+	return imgCh, errCh, cErrCh, nil
 }
 
 func (c *Containerd) ListImages(ctx context.Context) ([]Image, error) {
