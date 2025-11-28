@@ -10,7 +10,7 @@ import (
 const (
 	MaxBatch          = 100
 	FindKeyMaxResults = 2000
-	DEADTIMEOUT = 11 * time.Minute
+	DEADTIMEOUT = 31 * time.Minute
 )
 
 type Manager struct {
