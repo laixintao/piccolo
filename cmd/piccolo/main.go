@@ -28,13 +28,30 @@ var (
 	date    = "unknown"
 )
 
+type GlobalArgs struct {
+	LogLevel slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
+	Version  bool       `arg:"-v,--version" help:"show version"`
+}
+
+type ServerCmd struct {
+	GlobalArgs
+	PiccoloAddress string   `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
+	DBMasterDSN    string   `arg:"--db-master-dsn,env:DB_MASTER_DSN,required" help:"Master db"`
+	DBSlavesDSN    []string `arg:"--db-slaves-dsn,env:DB_SLAVES_DSN" help:"Slave dbs, can be multiple, if set, read requests will only be sent to slave db"`
+}
+
+type MigrateCmd struct {
+	GlobalArgs
+	Databases []string `arg:"positional,required" help:"Database DSN(s) to migrate"`
+}
+
 type Arguments struct {
-	PiccoloAddress string     `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
-	LogLevel       slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
-	Version        bool       `arg:"-v,--version" help:"show version"`
-	MigrateDB      bool       `arg:"--migrate-db" help:"Auto change database's schema"`
-	DBMasterDSN    string     `arg:"--db-master-dsn,env:DB_MASTER_DSN,required" help:"Master db"`
-	DBSlavesDSN    []string   `arg:"--db-slaves-dsn,env:DB_SLAVES_DSN" help:"Slave dbs, can be multiple, if set, read requests will only be sent to slave db"`
+	Server  *ServerCmd  `arg:"subcommand:server" help:"Start Piccolo server"`
+	Migrate *MigrateCmd `arg:"subcommand:migrate-db" help:"Migrate database schema to multiple databases"`
+}
+
+func (Arguments) Description() string {
+	return "Piccolo - A distributed image distribution system"
 }
 
 func main() {
@@ -44,9 +61,31 @@ func main() {
 			os.Exit(0)
 		}
 	}
-	args := &Arguments{}
-	arg.MustParse(args)
 
+	args := &Arguments{}
+	parser := arg.MustParse(args)
+
+	// Default to server command if no subcommand specified
+	if args.Server == nil && args.Migrate == nil {
+		// Re-parse with server as default
+		oldArgs := os.Args
+		os.Args = append([]string{os.Args[0], "server"}, os.Args[1:]...)
+		args = &Arguments{}
+		arg.MustParse(args)
+		os.Args = oldArgs
+	}
+
+	if args.Server != nil {
+		runServer(args.Server)
+	} else if args.Migrate != nil {
+		runMigrate(args.Migrate)
+	} else {
+		parser.WriteHelp(os.Stdout)
+		os.Exit(1)
+	}
+}
+
+func runServer(args *ServerCmd) {
 	opts := slog.HandlerOptions{
 		AddSource: true,
 		Level:     args.LogLevel,
@@ -62,16 +101,6 @@ func main() {
 	}
 
 	log.Info("MySQL database connected")
-
-	if args.MigrateDB {
-		log.Info("Now apply datbase migration (DDL)...")
-		if err := storage.AutoMigrate(db, &model.Distribution{}, &model.Host{}); err != nil {
-			log.Error(err, "failed to run database migration")
-			os.Exit(1)
-		}
-	}
-
-	log.Info("database migration completed successfully")
 
 	dbm := storage.NewManager(db)
 	distributionHandler := distributionHandler.NewDistributionHandler(dbm, log)
@@ -131,6 +160,36 @@ func main() {
 		log.Error(err, "server failed to start")
 		os.Exit(1)
 	}
+}
+
+func runMigrate(args *MigrateCmd) {
+	opts := slog.HandlerOptions{
+		AddSource: true,
+		Level:     args.LogLevel,
+	}
+	handler := slog.NewTextHandler(os.Stdout, &opts)
+	log := logr.FromSlogHandler(handler)
+	log.Info("Piccolo database migration tool started", "total_databases", len(args.Databases))
+
+	// Migrate each database
+	for i, dsn := range args.Databases {
+		log.Info("Migrating database", "index", i+1, "total", len(args.Databases))
+		
+		db, err := storage.InitMySQL(dsn, nil)
+		if err != nil {
+			log.Error(err, "failed to connect to database", "index", i+1)
+			os.Exit(1)
+		}
+		log.Info("Database connected", "index", i+1)
+
+		if err := storage.AutoMigrate(db, &model.Distribution{}, &model.Host{}); err != nil {
+			log.Error(err, "failed to migrate database schema", "index", i+1)
+			os.Exit(1)
+		}
+		log.Info("Database schema migrated successfully", "index", i+1)
+	}
+
+	log.Info("All databases migration completed successfully!", "total", len(args.Databases))
 }
 
 func registerVersionMetric() {
