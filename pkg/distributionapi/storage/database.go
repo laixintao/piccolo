@@ -19,14 +19,14 @@ const (
 	LogLevel        = logger.Info
 )
 
-func InitMySQL(dsnList []string) (*gorm.DB, error) {
+func InitMySQL(dsnList []string) (*gorm.DB, []string, error) {
 
 	// key = group, value = {type: dsn}
 	dsnConfig := make(map[string]map[string][]string)
 	for _, d := range dsnList {
 		parts := strings.SplitN(d, ":", 3)
 		if len(parts) != 3 {
-			return nil, fmt.Errorf("invalid DSN format: %s, expected format: group:type:dsn", d)
+			return nil, nil, fmt.Errorf("invalid DSN format: %s, expected format: group:type:dsn", d)
 		}
 		groupName := parts[0]
 		dbType := parts[1]
@@ -38,10 +38,16 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 		dsnConfig[groupName][dbType] = append(dsnConfig[groupName][dbType], dsnString)
 	}
 
+	// Collect all groups
+	groups := make([]string, 0, len(dsnConfig))
+	for group := range dsnConfig {
+		groups = append(groups, group)
+	}
+
 	// Get default master DSN as the primary connection
 	defaultMasters, ok := dsnConfig["default"]["master"]
 	if !ok || len(defaultMasters) == 0 {
-		return nil, fmt.Errorf("You must set default:master:dsn for the default db source!")
+		return nil, nil, fmt.Errorf("You must set default:master:dsn for the default db source!")
 	}
 	defaultDSN := defaultMasters[0]
 
@@ -53,7 +59,7 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("failed to connect to database: %w", err)
+		return nil, nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
 	// Build dbresolver configuration
@@ -121,13 +127,13 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 	// Apply dbresolver
 	if resolver != nil {
 		if err := db.Use(resolver); err != nil {
-			return nil, fmt.Errorf("failed to use dbresolver: %w", err)
+			return nil, nil, fmt.Errorf("failed to use dbresolver: %w", err)
 		}
 	}
 
 	sqlDB, err := db.DB()
 	if err != nil {
-		return nil, fmt.Errorf("failed to get database instance: %w", err)
+		return nil, nil, fmt.Errorf("failed to get database instance: %w", err)
 	}
 
 	sqlDB.SetMaxIdleConns(MaxIdleConns)
@@ -135,10 +141,10 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 	sqlDB.SetConnMaxLifetime(ConnMaxLifetime)
 
 	if err := sqlDB.Ping(); err != nil {
-		return nil, fmt.Errorf("failed to ping database: %w", err)
+		return nil, nil, fmt.Errorf("failed to ping database: %w", err)
 	}
 
-	return db, nil
+	return db, groups, nil
 }
 
 func AutoMigrate(db *gorm.DB, models ...interface{}) error {

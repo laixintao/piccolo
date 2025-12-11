@@ -101,15 +101,15 @@ func runServer(args *ServerCmd) {
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init, Piccolo started")
 
-	db, err := storage.InitMySQL(args.DbDsnList)
+	db, groups, err := storage.InitMySQL(args.DbDsnList)
 	if err != nil {
 		log.Error(err, "failed to connect to MySQL database")
 		os.Exit(1)
 	}
 
-	log.Info("MySQL database connected")
+	log.Info("MySQL database connected", "groups", groups)
 
-	dbm := storage.NewManager(db)
+	dbm := storage.NewManager(db, groups)
 	distributionHandler := distributionHandler.NewDistributionHandler(dbm, log)
 	defer dbm.Close()
 
@@ -183,7 +183,7 @@ func runMigrate(args *MigrateCmd) {
 		log.Info("Migrating database", "index", i+1, "total", len(args.Databases), "dsn", dsn)
 
 		// For migrate command, use simple single database connection (format: default:master:dsn_string)
-		db, err := storage.InitMySQL([]string{"default:master:" + dsn})
+		db, _, err := storage.InitMySQL([]string{"default:master:" + dsn})
 		if err != nil {
 			log.Error(err, "failed to connect to database", "index", i+1)
 			os.Exit(1)

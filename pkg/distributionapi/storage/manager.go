@@ -17,14 +17,20 @@ type Manager struct {
 	db           *gorm.DB
 	Distribution *DistributionManager
 	Host         *HostManager
+	groups       []string
 }
 
-func NewManager(db *gorm.DB) *Manager {
+func NewManager(db *gorm.DB, groups []string) *Manager {
 	return &Manager{
 		Distribution: NewDistributionManager(db),
 		Host:         NewHostManager(db),
 		db:           db,
+		groups:       groups,
 	}
+}
+
+func (m *Manager) GetGroups() []string {
+	return m.groups
 }
 
 func (m *Manager) Close() error {

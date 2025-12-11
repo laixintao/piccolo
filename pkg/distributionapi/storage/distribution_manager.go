@@ -32,20 +32,22 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	).CreateInBatches(distributions, MaxBatch).Error; err != nil {
 		return err
 	}
-	metrics.DBQueryTotal.WithLabelValues("distribution_tab", "insert").Inc()
-	metrics.DBQueryDuration.WithLabelValues("distribution_tab", "insert").Observe(time.Since(start).Seconds())
+	metrics.DBQueryTotal.WithLabelValues("distribution_tab", "insert", group).Inc()
+	metrics.DBQueryDuration.WithLabelValues("distribution_tab", "insert", group).Observe(time.Since(start).Seconds())
 	return nil
 }
 
 func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, key string) ([]string, error) {
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_holder_by_key").Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_holder_by_key").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_holder_by_key", group).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_holder_by_key", group).Observe(time.Since(start).Seconds())
 	}()
 
 	var holders []string
-	query := m.db.WithContext(ctx).Model(&model.Distribution{}).
+	query := m.db.WithContext(ctx).
+		Clauses(dbresolver.Use(group)).
+		Model(&model.Distribution{}).
 		Where("`group` = ? AND `key` = ?", group, key).
 		Limit(FindKeyMaxResults)
 
@@ -59,12 +61,13 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, 
 func (m *DistributionManager) GetKeysByHolder(group, holder string) ([]string, error) {
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_keys_by_holder").Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_keys_by_holder").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_keys_by_holder", group).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_keys_by_holder", group).Observe(time.Since(start).Seconds())
 	}()
 
 	var keys []string
 	if err := m.db.
+		Clauses(dbresolver.Use(group)).
 		Model(&model.Distribution{}).
 		Where("`holder` = ? AND `group` = ?", holder, group).
 		Pluck("`key`", &keys).Error; err != nil {
@@ -80,11 +83,12 @@ func (m *DistributionManager) DeleteByKeysByHolder(keys []string, holder, group 
 
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_keys").Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_keys").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_keys", group).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_keys", group).Observe(time.Since(start).Seconds())
 	}()
 
 	return m.db.
+		Clauses(dbresolver.Use(group)).
 		Where("`group` = ? AND `key` IN ? AND holder = ?", group, keys, holder).
 		Delete(&model.Distribution{}).Error
 }
@@ -92,11 +96,12 @@ func (m *DistributionManager) DeleteByKeysByHolder(keys []string, holder, group 
 func (m *DistributionManager) DeleteByHolder(host model.Host) error {
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_holder").Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_holder").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_holder", host.Group).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_holder", host.Group).Observe(time.Since(start).Seconds())
 	}()
 
 	if err := m.db.
+		Clauses(dbresolver.Use(host.Group)).
 		Where("`holder` = ? AND `group` = ?", host.HostAddr, host.Group).
 		Delete(&model.Distribution{}).Error; err != nil {
 		return fmt.Errorf("failed to delete distributions for holder %s (group=%s): %w",

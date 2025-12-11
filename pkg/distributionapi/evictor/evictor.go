@@ -66,23 +66,29 @@ func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
 
 	}()
 	log := logr.FromContextOrDiscard(ctx)
-	deadHosts, err := m.Host.FindDeadHosts()
-	if err != nil {
-		return err
-	}
 
-	for _, dh := range deadHosts {
-		metrics.EvictorDeletedHostTotal.WithLabelValues().Inc()
-		log.Info("Evict dead host", "host", dh)
-		err := m.Distribution.DeleteByHolder(dh)
+	// Iterate through all groups to find and evict dead hosts
+	for _, group := range m.GetGroups() {
+		log.Info("Checking dead hosts for group", "group", group)
+		deadHosts, err := m.Host.FindDeadHosts(group)
 		if err != nil {
-			log.Error(err, "Error when delete distributions by holder", "holder", dh)
+			log.Error(err, "Error when finding dead hosts", "group", group)
 			continue
 		}
-		err = m.Host.DeleteHost(dh)
-		if err != nil {
-			log.Error(err, "Error when delete Hosts by host_tab", "holder", dh)
-			continue
+
+		for _, dh := range deadHosts {
+			metrics.EvictorDeletedHostTotal.WithLabelValues().Inc()
+			log.Info("Evict dead host", "host", dh, "group", group)
+			err := m.Distribution.DeleteByHolder(dh)
+			if err != nil {
+				log.Error(err, "Error when delete distributions by holder", "holder", dh)
+				continue
+			}
+			err = m.Host.DeleteHost(dh)
+			if err != nil {
+				log.Error(err, "Error when delete Hosts by host_tab", "holder", dh)
+				continue
+			}
 		}
 	}
 

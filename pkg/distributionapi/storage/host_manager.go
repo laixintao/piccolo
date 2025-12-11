@@ -8,6 +8,7 @@ import (
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/plugin/dbresolver"
 )
 
 type HostManager struct {
@@ -20,8 +21,8 @@ func NewHostManager(db *gorm.DB) *HostManager {
 func (m *HostManager) RefreshHostAddr(hostAddr, group string) error {
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "refresh_host_addr").Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "refresh_host_addr").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "refresh_host_addr", group).Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "refresh_host_addr", group).Observe(time.Since(start).Seconds())
 	}()
 
 	now := time.Now()
@@ -31,24 +32,28 @@ func (m *HostManager) RefreshHostAddr(hostAddr, group string) error {
 		LastSeen: now,
 	}
 
-	return m.db.Clauses(clause.OnConflict{
-		Columns:   []clause.Column{{Name: "host_addr"}, {Name: "group"}},
-		DoUpdates: clause.AssignmentColumns([]string{"last_seen"}),
-	}).Create(host).Error
+	return m.db.Clauses(
+		dbresolver.Use(group),
+		clause.OnConflict{
+			Columns:   []clause.Column{{Name: "host_addr"}, {Name: "group"}},
+			DoUpdates: clause.AssignmentColumns([]string{"last_seen"}),
+		},
+	).Create(host).Error
 }
 
-func (m *HostManager) FindDeadHosts() ([]model.Host, error) {
+func (m *HostManager) FindDeadHosts(group string) ([]model.Host, error) {
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "find_dead_hosts").Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "find_dead_hosts").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "find_dead_hosts", group).Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "find_dead_hosts", group).Observe(time.Since(start).Seconds())
 	}()
 
 	threshold := time.Now().Add(-DEADTIMEOUT)
 	var deadHosts []model.Host
 	if err := m.db.
+		Clauses(dbresolver.Use(group)).
 		Model(&model.Host{}).
-		Where("last_seen < ?", threshold).
+		Where("last_seen < ? AND `group` = ?", threshold, group).
 		Find(&deadHosts).Error; err != nil {
 		return nil, fmt.Errorf("failed to find dead hosts: %w", err)
 	}
@@ -59,11 +64,12 @@ func (m *HostManager) FindDeadHosts() ([]model.Host, error) {
 func (m *HostManager) DeleteHost(host model.Host) error {
 	start := time.Now()
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "delete_host").Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "delete_host").Observe(time.Since(start).Seconds())
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "delete_host", host.Group).Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "delete_host", host.Group).Observe(time.Since(start).Seconds())
 	}()
 
 	if err := m.db.
+		Clauses(dbresolver.Use(host.Group)).
 		Where("`host_addr` = ? AND `group` = ?", host.HostAddr, host.Group).
 		Delete(&model.Host{}).Error; err != nil {
 		return fmt.Errorf("failed to delete host %s (group=%s): %w",

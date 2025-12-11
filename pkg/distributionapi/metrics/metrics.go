@@ -18,12 +18,12 @@ var (
 	DBQueryTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
 		Name: "piccolo_db_query_total",
 		Help: "Total number of database queries.",
-	}, []string{"table", "operation"})
+	}, []string{"table", "operation", "group"})
 
 	DBQueryDuration = prometheus.NewHistogramVec(prometheus.HistogramOpts{
 		Name: "piccolo_db_query_duration_seconds",
 		Help: "Duration of database queries in seconds.",
-	}, []string{"table", "operation"})
+	}, []string{"table", "operation", "group"})
 
 	FindKeyHolderCountBucket = prometheus.NewHistogram(
 		prometheus.HistogramOpts{
