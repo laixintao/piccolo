@@ -68,7 +68,7 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		return
 	}
 
-	if err := h.m.Distribution.CreateDistributions(distributions); err != nil {
+	if err := h.m.Distribution.CreateDistributions(distributions, req.Group); err != nil {
 		h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
@@ -214,7 +214,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 			})
 		}
 
-		if err := h.m.Distribution.CreateDistributions(distributions); err != nil {
+		if err := h.m.Distribution.CreateDistributions(distributions, req.Group); err != nil {
 			h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
 			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 				Success: false,

@@ -20,7 +20,7 @@ func NewDistributionManager(db *gorm.DB) *DistributionManager {
 	return &DistributionManager{db: db}
 }
 
-func (m *DistributionManager) CreateDistributions(distributions []*model.Distribution) error {
+func (m *DistributionManager) CreateDistributions(distributions []*model.Distribution, group string) error {
 	if len(distributions) == 0 {
 		return nil
 	}
@@ -28,7 +28,7 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	start := time.Now()
 	if err := m.db.Clauses(
 		clause.Insert{Modifier: "IGNORE"},
-		dbresolver.Use("group1"),
+		dbresolver.Use(group),
 	).CreateInBatches(distributions, MaxBatch).Error; err != nil {
 		return err
 	}
