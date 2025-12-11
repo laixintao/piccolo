@@ -2,12 +2,12 @@
 # -*- coding: utf-8 -*-
 """
 gen_http_targets.py
-生成 http-format 测试文件及对应 body json 文件。
-包含 advertise、findkey 和 sync 请求。
-- findkey 请求数量是 advertise 的10倍
-- sync 请求数量是 findkey 的1/20，但会模拟突发高 QPS
-- findkey: 70%概率使用已 advertise 的 key，30%使用随机 key
-- sync: 30%概率使用已有的 key，70%使用新 key，key 长度在100-10000之间
+Generate http-format test files and corresponding body json files.
+Contains advertise, findkey, and sync requests.
+- Number of findkey requests is 10x of advertise
+- Number of sync requests is 1/20 of findkey, simulating burst high QPS
+- findkey: 70% probability uses already advertised keys, 30% uses random keys
+- sync: 30% probability uses existing keys, 70% uses new keys, key length between 100-10000
 """
 
 import argparse
@@ -29,7 +29,7 @@ HOLDER_PORT = 5123
 
 
 def random_ipv4():
-    """生成一个随机 IPv4 地址（避免保留网段）"""
+    """Generate a random IPv4 address (avoiding reserved segments)"""
     a = "10"
     b = random.randint(0, 255)
     c = random.randint(0, 255)
@@ -38,19 +38,19 @@ def random_ipv4():
 
 
 def random_sha256():
-    """生成随机 sha256:<64hex>"""
+    """Generate random sha256:<64hex>"""
     random_bytes = os.urandom(32)
     digest = hashlib.sha256(random_bytes).hexdigest()
     return f"sha256:{digest}"
 
 def make_sync_body(existing_keys=None):
-    """生成 sync 请求的 body"""
+    """Generate body for sync request"""
     holder_ip = random_ipv4()
-    num_keys = random.randint(50, 2000)  # sync 通常有更多 keys
+    num_keys = random.randint(50, 2000)  # sync usually has more keys
     
     keys = []
     for _ in range(num_keys):
-        # 30% 概率使用已有的 key，70% 使用新 key
+        # 30% probability uses existing keys, 70% uses new keys
         if random.random() < 0.3 and existing_keys:
             key = random.choice(existing_keys)
         else:
@@ -64,7 +64,7 @@ def make_sync_body(existing_keys=None):
 
 
 def make_advertise_body():
-    """生成 advertise 请求的 body"""
+    """Generate body for advertise request"""
     holder_ip = random_ipv4()
     num_keys = random.randint(0, 1000)
     keys = [random_sha256() for _ in range(num_keys)]
@@ -75,7 +75,7 @@ def make_advertise_body():
 
 
 def make_findkey_url(key, count=10):
-    """生成 findkey 请求的 URL"""
+    """Generate URL for findkey request"""
     return f"{FINDKEY_URL}?key={key}&count={count}"
 
 
@@ -89,17 +89,17 @@ def generate(outdir, num_advertise_targets):
     ensure_dir(bodies_dir)
     targets_path = os.path.join(outdir, "targets.http")
 
-    # 存储所有 advertise 的 keys，用于后续的 findkey 和 sync 请求
+    # Store all advertised keys for subsequent findkey and sync requests
     advertised_keys = []
     
-    # 计算请求数量
+    # Calculate request quantities
     num_findkey_targets = num_advertise_targets * 10
-    num_sync_targets = max(1, num_findkey_targets // 20)  # sync 是 findkey 的 1/20
+    num_sync_targets = max(1, num_findkey_targets // 20)  # sync is 1/20 of findkey
     
-    # 创建所有请求的列表，用于混合生成
+    # Create list of all requests for mixed generation
     all_requests = []
     
-    # 添加所有请求类型
+    # Add all request types
     for i in range(num_advertise_targets):
         all_requests.append(('advertise', i))
     for i in range(num_findkey_targets):
@@ -107,16 +107,16 @@ def generate(outdir, num_advertise_targets):
     for i in range(num_sync_targets):
         all_requests.append(('sync', i))
     
-    # 随机打乱所有请求
+    # Randomly shuffle all requests
     random.shuffle(all_requests)
 
     with open(targets_path, "w", encoding="utf-8") as tf:
         tf.write("# generated http-format targets\n")
-        tf.write("# 包含混合的 advertise、findkey 和 sync 请求\n\n")
+        tf.write("# Contains mixed advertise, findkey, and sync requests\n\n")
         
         total_requests = len(all_requests)
         
-        # 批量处理，减少文件 I/O
+        # Batch processing to reduce file I/O
         body_files_to_write = []
         
         for i, (req_type, req_idx) in enumerate(all_requests):
@@ -127,10 +127,10 @@ def generate(outdir, num_advertise_targets):
                 body_disk_path = os.path.join(bodies_dir, body_fname)
 
                 body_obj = make_advertise_body()
-                # 收集 keys 用于后续的 findkey 和 sync 请求
+                # Collect keys for subsequent findkey and sync requests
                 advertised_keys.extend(body_obj["keys"])
                 
-                # 收集要写入的文件
+                # Collect files to write
                 body_files_to_write.append((body_disk_path, body_obj))
 
                 tf.write(f"{ADVERTISE_METHOD} {ADVERTISE_URL}\n")
@@ -140,15 +140,15 @@ def generate(outdir, num_advertise_targets):
                     print(".", end="", flush=True)
                 
             elif req_type == 'findkey':
-                # 70% 概率使用已 advertise 的 key，30% 使用随机 key
+                # 70% probability uses already advertised keys, 30% uses random keys
                 if random.random() < 0.7 and advertised_keys:
-                    # 使用已 advertise 的 key
+                    # Use already advertised key
                     key = random.choice(advertised_keys)
                 else:
-                    # 使用随机生成的 key
+                    # Use randomly generated key
                     key = random_sha256()
                 
-                count = random.randint(1, 20)  # 随机 count 参数
+                count = random.randint(1, 20)  # Random count parameter
                 url = make_findkey_url(key, count)
                 
                 tf.write(f"{FINDKEY_METHOD} {url}\n")
@@ -164,7 +164,7 @@ def generate(outdir, num_advertise_targets):
 
                 body_obj = make_sync_body(advertised_keys)
                 
-                # 收集要写入的文件
+                # Collect files to write
                 body_files_to_write.append((body_disk_path, body_obj))
 
                 tf.write(f"{SYNC_METHOD} {SYNC_URL}\n")
@@ -173,27 +173,27 @@ def generate(outdir, num_advertise_targets):
                 if (i + 1) % 100 == 0:
                     print("#", end="", flush=True)
         
-        # 批量写入所有 JSON 文件
-        print("\n正在写入 JSON 文件...", end="", flush=True)
+        # Batch write all JSON files
+        print("\nWriting JSON files...", end="", flush=True)
         for body_disk_path, body_obj in body_files_to_write:
             with open(body_disk_path, "w", encoding="utf-8") as bf:
                 json.dump(body_obj, bf, separators=(',', ':'), ensure_ascii=False)
-        print(" 完成!")
+        print(" Done!")
 
     print()
-    print(f"✅ 生成完成：")
-    print(f"   - {num_advertise_targets} 个 advertise 请求")
-    print(f"   - {num_findkey_targets} 个 findkey 请求")
-    print(f"   - {num_sync_targets} 个 sync 请求")
-    print(f"   - 总共 {len(advertised_keys)} 个已 advertise 的 keys")
-    print(f"   - 输出目录：{outdir}")
+    print(f"✅ Generation completed:")
+    print(f"   - {num_advertise_targets} advertise requests")
+    print(f"   - {num_findkey_targets} findkey requests")
+    print(f"   - {num_sync_targets} sync requests")
+    print(f"   - Total {len(advertised_keys)} advertised keys")
+    print(f"   - Output directory: {outdir}")
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="生成随机 http-format 测试文件")
-    parser.add_argument("-o", "--outdir", default="./out_targets", help="输出目录")
+    parser = argparse.ArgumentParser(description="Generate random http-format test files")
+    parser.add_argument("-o", "--outdir", default="./out_targets", help="Output directory")
     parser.add_argument("-n", "--advertise-number", type=int, default=5, 
-                       help="要生成的 advertise 请求数量（findkey 请求将是此数量的10倍，sync 请求将是 findkey 的1/20）")
+                       help="Number of advertise requests to generate (findkey requests will be 10x this number, sync requests will be 1/20 of findkey)")
     args = parser.parse_args()
 
     generate(args.outdir, args.advertise_number)

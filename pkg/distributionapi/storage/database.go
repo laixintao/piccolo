@@ -38,14 +38,14 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 		dsnConfig[groupName][dbType] = append(dsnConfig[groupName][dbType], dsnString)
 	}
 
-	// 获取 default master DSN 作为主连接
+	// Get default master DSN as the primary connection
 	defaultMasters, ok := dsnConfig["default"]["master"]
 	if !ok || len(defaultMasters) == 0 {
 		return nil, fmt.Errorf("You must set default:master:dsn for the default db source!")
 	}
 	defaultDSN := defaultMasters[0]
 
-	// 初始化 db 连接
+	// Initialize database connection
 	db, err := gorm.Open(mysql.Open(defaultDSN), &gorm.Config{
 		Logger: logger.Default.LogMode(logger.Info),
 		NowFunc: func() time.Time {
@@ -56,10 +56,10 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 		return nil, fmt.Errorf("failed to connect to database: %w", err)
 	}
 
-	// 构建 dbresolver 配置
+	// Build dbresolver configuration
 	var resolver *dbresolver.DBResolver
 
-	// 首先注册 default 组的 slave（如果有）
+	// First, register slaves for the default group (if any)
 	if defaultSlaves, ok := dsnConfig["default"]["slave"]; ok && len(defaultSlaves) > 0 {
 		var replicas []gorm.Dialector
 		for _, slaveDSN := range defaultSlaves {
@@ -72,30 +72,30 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 		})
 	}
 
-	// 然后注册其他 group 的配置
+	// Then register configurations for other groups
 	for group, typeDSNs := range dsnConfig {
 		if group == "default" {
-			continue // 已经处理过了
+			continue // Already handled
 		}
 
 		var sources []gorm.Dialector
 		var replicas []gorm.Dialector
 
-		// 收集 master DSN
+		// Collect master DSNs
 		if masters, ok := typeDSNs["master"]; ok {
 			for _, masterDSN := range masters {
 				sources = append(sources, mysql.Open(masterDSN))
 			}
 		}
 
-		// 收集 slave DSN
+		// Collect slave DSNs
 		if slaves, ok := typeDSNs["slave"]; ok {
 			for _, slaveDSN := range slaves {
 				replicas = append(replicas, mysql.Open(slaveDSN))
 			}
 		}
 
-		// 如果这个 group 有配置，就注册
+		// Register if this group has configuration
 		if len(sources) > 0 || len(replicas) > 0 {
 			config := dbresolver.Config{
 				Policy:            dbresolver.RandomPolicy{},
@@ -109,7 +109,7 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 				config.Replicas = replicas
 			}
 
-			// 链式调用 Register，用 group 名称作为 resolver 名称
+			// Chain Register calls, using group name as resolver name
 			if resolver == nil {
 				resolver = dbresolver.Register(config, group)
 			} else {
@@ -118,7 +118,7 @@ func InitMySQL(dsnList []string) (*gorm.DB, error) {
 		}
 	}
 
-	// 应用 dbresolver
+	// Apply dbresolver
 	if resolver != nil {
 		if err := db.Use(resolver); err != nil {
 			return nil, fmt.Errorf("failed to use dbresolver: %w", err)

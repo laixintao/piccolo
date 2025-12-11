@@ -182,7 +182,7 @@ func runMigrate(args *MigrateCmd) {
 	for i, dsn := range args.Databases {
 		log.Info("Migrating database", "index", i+1, "total", len(args.Databases), "dsn", dsn)
 
-		// 对于 migrate 命令，使用简单的单数据库连接（格式：default:master:dsn_string）
+		// For migrate command, use simple single database connection (format: default:master:dsn_string)
 		db, err := storage.InitMySQL([]string{"default:master:" + dsn})
 		if err != nil {
 			log.Error(err, "failed to connect to database", "index", i+1)
