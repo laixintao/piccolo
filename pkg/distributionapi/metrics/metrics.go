@@ -46,6 +46,11 @@ var (
 		Name: "piccolo_evictor_duration_seconds",
 		Help: "Duration of evictor run",
 	}, []string{})
+
+	EvictorEnabled = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "piccolo_evictor_enabled",
+		Help: "Indicates whether evictor is enabled (1) or disabled (0)",
+	})
 )
 
 func Register() {
@@ -55,4 +60,5 @@ func Register() {
 	DefaultRegisterer.MustRegister(EvictorRunTotal)
 	DefaultRegisterer.MustRegister(EvictorDuration)
 	DefaultRegisterer.MustRegister(EvictorDeletedHostTotal)
+	DefaultRegisterer.MustRegister(EvictorEnabled)
 }

@@ -162,11 +162,13 @@ func runServer(args *ServerCmd) {
 
 	ctx := logr.NewContext(context.Background(), log)
 	
-	// Start evictor only if enabled
+	// Set evictor enabled metric
 	if args.EnableEvictor {
+		metrics.EvictorEnabled.Set(1)
 		log.Info("Evictor enabled, starting background cleanup goroutine")
 		go evictor.StartEvictor(ctx, dbm)
 	} else {
+		metrics.EvictorEnabled.Set(0)
 		log.Info("Evictor disabled, dead hosts will not be cleaned up automatically")
 	}
 
