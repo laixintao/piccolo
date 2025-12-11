@@ -14,23 +14,29 @@ const (
 )
 
 type Manager struct {
-	db           *gorm.DB
-	Distribution *DistributionManager
-	Host         *HostManager
-	groups       []string
+	db              *gorm.DB
+	Distribution    *DistributionManager
+	Host            *HostManager
+	groups          []string
+	masterResolvers []string
 }
 
-func NewManager(db *gorm.DB, groups []string) *Manager {
+func NewManager(db *gorm.DB, groups []string, masterResolvers []string) *Manager {
 	return &Manager{
-		Distribution: NewDistributionManager(db),
-		Host:         NewHostManager(db),
-		db:           db,
-		groups:       groups,
+		Distribution:    NewDistributionManager(db),
+		Host:            NewHostManager(db),
+		db:              db,
+		groups:          groups,
+		masterResolvers: masterResolvers,
 	}
 }
 
 func (m *Manager) GetGroups() []string {
 	return m.groups
+}
+
+func (m *Manager) GetMasterResolvers() []string {
+	return m.masterResolvers
 }
 
 func (m *Manager) Close() error {

@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	EVICTORCHECKTIME = 10 * time.Minute
+	EVICTORCHECKTIME = 1 * time.Minute
 )
 
 // If server not report health over 10 minutes, delete it
@@ -66,27 +66,34 @@ func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
 
 	}()
 	log := logr.FromContextOrDiscard(ctx)
-
-	// Iterate through all groups to find and evict dead hosts
-	for _, group := range m.GetGroups() {
-		log.Info("Checking dead hosts for group", "group", group)
-		deadHosts, err := m.Host.FindDeadHosts(group)
+	
+	// Iterate through all master resolvers to find and evict dead hosts
+	// This ensures we clean up all hosts in each physical master database,
+	// regardless of their group field value
+	for _, masterResolver := range m.GetMasterResolvers() {
+		log.Info("Checking dead hosts in master database", "masterResolver", masterResolver)
+		deadHosts, err := m.Host.FindDeadHostsByMasterResolver(masterResolver)
 		if err != nil {
-			log.Error(err, "Error when finding dead hosts", "group", group)
+			log.Error(err, "Error when finding dead hosts", "masterResolver", masterResolver)
 			continue
 		}
 
+		log.Info("Found dead hosts", "masterResolver", masterResolver, "count", len(deadHosts))
 		for _, dh := range deadHosts {
 			metrics.EvictorDeletedHostTotal.WithLabelValues().Inc()
-			log.Info("Evict dead host", "host", dh, "group", group)
-			err := m.Distribution.DeleteByHolder(dh)
+			log.Info("Evict dead host", "host", dh.HostAddr, "group", dh.Group, "masterResolver", masterResolver)
+			
+			// Delete distributions for this host from the master database
+			err := m.Distribution.DeleteByHolderByMasterResolver(dh, masterResolver)
 			if err != nil {
-				log.Error(err, "Error when delete distributions by holder", "holder", dh)
+				log.Error(err, "Error when delete distributions by holder", "holder", dh.HostAddr, "group", dh.Group, "masterResolver", masterResolver)
 				continue
 			}
-			err = m.Host.DeleteHost(dh)
+			
+			// Delete the host from the master database
+			err = m.Host.DeleteHostByMasterResolver(dh, masterResolver)
 			if err != nil {
-				log.Error(err, "Error when delete Hosts by host_tab", "holder", dh)
+				log.Error(err, "Error when delete host", "host", dh.HostAddr, "group", dh.Group, "masterResolver", masterResolver)
 				continue
 			}
 		}

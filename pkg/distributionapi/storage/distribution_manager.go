@@ -109,3 +109,22 @@ func (m *DistributionManager) DeleteByHolder(host model.Host) error {
 	}
 	return nil
 }
+
+// DeleteByHolderByMasterResolver deletes distributions using the master resolver
+// This ensures deletion from the correct physical database
+func (m *DistributionManager) DeleteByHolderByMasterResolver(host model.Host, masterResolver string) error {
+	start := time.Now()
+	defer func() {
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_holder_by_master", masterResolver).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_holder_by_master", masterResolver).Observe(time.Since(start).Seconds())
+	}()
+
+	if err := m.db.
+		Clauses(dbresolver.Use(masterResolver), dbresolver.Write).
+		Where("`holder` = ? AND `group` = ?", host.HostAddr, host.Group).
+		Delete(&model.Distribution{}).Error; err != nil {
+		return fmt.Errorf("failed to delete distributions for holder %s (group=%s) from master %s: %w",
+			host.HostAddr, host.Group, masterResolver, err)
+	}
+	return nil
+}
