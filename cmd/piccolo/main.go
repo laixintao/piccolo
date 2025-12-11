@@ -37,15 +37,7 @@ type ServerCmd struct {
 	GlobalArgs
 	PiccoloAddress string   `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
 	EnableEvictor  bool     `arg:"--enable-evictor,env:ENABLE_EVICTOR" default:"false" help:"Enable evictor to clean up dead hosts automatically"`
-	DbDsnList      []string `arg:"--db-dsn-list,env:DB_SLAVES_DSN" help:"DB DSN list, the format is "<group>:<dbtype>:<dsn>", 
-	means that for this <group>("default" for all groups), piccolo
-	will use <dsn>, <dbtype> is for mysql db is master or slave.
-	(mysql master), "replica" for read only requests (mysql slave). 
-	for exmaple, if you put: --db-dsn-list "default:master:username:password@tcp(127.0.0.1:3306)/db1"
-	"default:slave:username:password@tcp(127.0.0.1:3306)/db2"
-	"us-1:master:username:password@tcp(127.0.0.1:3306)/db3", then for us-1 group, all ready/write will goes to db3,
-	all other read requests will go to db2, and all other write requests will go to db1.
-	`
+	DbDsnList      []string `arg:"--db-dsn-list,env:DB_DSN_LIST,required" help:"DB DSN list in format '<group>:<dbtype>:<dsn>'. dbtype can be 'master' or 'slave'. Example: 'default:master:user:pass@tcp(host:3306)/db1' 'us-1:master:user:pass@tcp(host:3306)/db2'"`
 }
 
 type MigrateCmd struct {
