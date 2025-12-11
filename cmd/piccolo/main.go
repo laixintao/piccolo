@@ -36,6 +36,7 @@ type GlobalArgs struct {
 type ServerCmd struct {
 	GlobalArgs
 	PiccoloAddress string   `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
+	EnableEvictor  bool     `arg:"--enable-evictor,env:ENABLE_EVICTOR" default:"false" help:"Enable evictor to clean up dead hosts automatically"`
 	DbDsnList      []string `arg:"--db-dsn-list,env:DB_SLAVES_DSN" help:"DB DSN list, the format is "<group>:<dbtype>:<dsn>", 
 	means that for this <group>("default" for all groups), piccolo
 	will use <dsn>, <dbtype> is for mysql db is master or slave.
@@ -157,10 +158,17 @@ func runServer(args *ServerCmd) {
 		}
 	}
 
-	log.Info("server starting", "piccolo-address", args.PiccoloAddress)
+	log.Info("server starting", "piccolo-address", args.PiccoloAddress, "evictor-enabled", args.EnableEvictor)
 
 	ctx := logr.NewContext(context.Background(), log)
-	go evictor.StartEvictor(ctx, dbm)
+	
+	// Start evictor only if enabled
+	if args.EnableEvictor {
+		log.Info("Evictor enabled, starting background cleanup goroutine")
+		go evictor.StartEvictor(ctx, dbm)
+	} else {
+		log.Info("Evictor disabled, dead hosts will not be cleaned up automatically")
+	}
 
 	// Start server with configured host and port
 	if err := r.Run(args.PiccoloAddress); err != nil {

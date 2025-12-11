@@ -11,7 +11,7 @@ import (
 )
 
 const (
-	EVICTORCHECKTIME = 1 * time.Minute
+	EVICTORCHECKTIME = 10 * time.Minute
 )
 
 // If server not report health over 10 minutes, delete it
