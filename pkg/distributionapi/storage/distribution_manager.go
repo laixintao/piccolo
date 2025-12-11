@@ -9,6 +9,7 @@ import (
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
+	"gorm.io/plugin/dbresolver"
 )
 
 type DistributionManager struct {
@@ -25,7 +26,10 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	}
 
 	start := time.Now()
-	if err := m.db.Clauses(clause.Insert{Modifier: "IGNORE"}).CreateInBatches(distributions, MaxBatch).Error; err != nil {
+	if err := m.db.Clauses(
+		clause.Insert{Modifier: "IGNORE"},
+		dbresolver.Use("group1"),
+	).CreateInBatches(distributions, MaxBatch).Error; err != nil {
 		return err
 	}
 	metrics.DBQueryTotal.WithLabelValues("distribution_tab", "insert").Inc()
@@ -100,4 +104,3 @@ func (m *DistributionManager) DeleteByHolder(host model.Host) error {
 	}
 	return nil
 }
-

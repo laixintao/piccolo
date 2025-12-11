@@ -36,8 +36,15 @@ type GlobalArgs struct {
 type ServerCmd struct {
 	GlobalArgs
 	PiccoloAddress string   `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
-	DBMasterDSN    string   `arg:"--db-master-dsn,env:DB_MASTER_DSN,required" help:"Master db"`
-	DBSlavesDSN    []string `arg:"--db-slaves-dsn,env:DB_SLAVES_DSN" help:"Slave dbs, can be multiple, if set, read requests will only be sent to slave db"`
+	DbDsnList      []string `arg:"--db-dsn-list,env:DB_SLAVES_DSN" help:"DB DSN list, the format is "<group>:<dbtype>:<dsn>", 
+	means that for this <group>("default" for all groups), piccolo
+	will use <dsn>, <dbtype> is for mysql db is master or slave.
+	(mysql master), "replica" for read only requests (mysql slave). 
+	for exmaple, if you put: --db-dsn-list "default:master:username:password@tcp(127.0.0.1:3306)/db1"
+	"default:slave:username:password@tcp(127.0.0.1:3306)/db2"
+	"us-1:master:username:password@tcp(127.0.0.1:3306)/db3", then for us-1 group, all ready/write will goes to db3,
+	all other read requests will go to db2, and all other write requests will go to db1.
+	`
 }
 
 type MigrateCmd struct {
@@ -94,7 +101,7 @@ func runServer(args *ServerCmd) {
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init, Piccolo started")
 
-	db, err := storage.InitMySQL(args.DBMasterDSN, args.DBSlavesDSN)
+	db, err := storage.InitMySQL(args.DbDsnList)
 	if err != nil {
 		log.Error(err, "failed to connect to MySQL database")
 		os.Exit(1)
@@ -173,9 +180,10 @@ func runMigrate(args *MigrateCmd) {
 
 	// Migrate each database
 	for i, dsn := range args.Databases {
-		log.Info("Migrating database", "index", i+1, "total", len(args.Databases))
-		
-		db, err := storage.InitMySQL(dsn, nil)
+		log.Info("Migrating database", "index", i+1, "total", len(args.Databases), "dsn", dsn)
+
+		// 对于 migrate 命令，使用简单的单数据库连接（格式：default:master:dsn_string）
+		db, err := storage.InitMySQL([]string{"default:master:" + dsn})
 		if err != nil {
 			log.Error(err, "failed to connect to database", "index", i+1)
 			os.Exit(1)
