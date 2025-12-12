@@ -225,6 +225,7 @@ func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
 		1*time.Second,
 		10*time.Second,
 		p.httpClient,
+		metrics.KeepAliveTotal,
 	)
 	if err != nil {
 		log.Error(err, "SD Keepalive Error", "requestBody", body)

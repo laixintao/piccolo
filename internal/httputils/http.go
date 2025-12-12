@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus"
 )
 
 var ErrNotFound = errors.New("404 not found")
@@ -25,7 +26,12 @@ func DoRequestWithRetry(
 	singleTimeout time.Duration,
 	totalTimeout time.Duration,
 	client *http.Client,
+	requestMetrics ...*prometheus.CounterVec,
 ) (*http.Response, error) {
+	var metrics *prometheus.CounterVec
+	if len(requestMetrics) > 0 {
+		metrics = requestMetrics[0]
+	}
 	if client == nil {
 		client = http.DefaultClient
 	}
@@ -74,21 +80,36 @@ func DoRequestWithRetry(
 		if err != nil {
 			lastErr = err
 			log.Error(err, "http request get error", "attemp", attempt)
+			if metrics != nil {
+				metrics.WithLabelValues("fail").Inc()
+			}
 		} else {
 			switch {
 			case resp.StatusCode >= 500:
 				resp.Body.Close()
 				lastErr = fmt.Errorf("server error: %s", resp.Status)
 				log.Info("http request status code 5xx", "attemp", attempt, "status_code", resp.Status)
+				if metrics != nil {
+					metrics.WithLabelValues("fail").Inc()
+				}
 			case resp.StatusCode == http.StatusNotFound:
 				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
+				if metrics != nil {
+					metrics.WithLabelValues("fail").Inc()
+				}
 				return nil, fmt.Errorf("url: %s, err: %w, respBody: %s", url, ErrNotFound, respBody)
 			case resp.StatusCode >= 400:
 				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
+				if metrics != nil {
+					metrics.WithLabelValues("fail").Inc()
+				}
 				return nil, fmt.Errorf("client error: %s, body: %s", resp.Status, string(respBody))
 			default:
+				if metrics != nil {
+					metrics.WithLabelValues("success").Inc()
+				}
 				return resp, nil
 			}
 		}

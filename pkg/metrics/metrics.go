@@ -67,10 +67,10 @@ var (
 		Name:      "requests_blob_inflight",
 		Help:      "Current uploading blobs, current connection gauge",
 	}, []string{})
-	HeartBeatTotal = prometheus.NewCounter(prometheus.CounterOpts{
-		Name: "piccolo_heart_beat_total",
-		Help: "How many times we report ourself's health",
-	})
+	KeepAliveTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "piccolo_keepalive_total",
+		Help: "Total number of keepalive requests on Pi client side",
+	}, []string{"status"})
 )
 
 func Register() {
@@ -86,4 +86,5 @@ func Register() {
 	DefaultRegisterer.MustRegister(HttpRequestsBlobHandlerInflight)
 	DefaultRegisterer.MustRegister(ContainerdSubscribeTotal)
 	DefaultRegisterer.MustRegister(ContainerdSubscribeEventTotal)
+	DefaultRegisterer.MustRegister(KeepAliveTotal)
 }
