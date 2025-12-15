@@ -1,9 +1,9 @@
 package storage
 
 import (
-	"strings"
-
 	"fmt"
+	"log"
+	"strings"
 	"time"
 
 	"gorm.io/driver/mysql"
@@ -31,6 +31,8 @@ func InitMySQL(dsnList []string) (*gorm.DB, []string, []string, error) {
 		groupName := parts[0]
 		dbType := parts[1]
 		dsnString := parts[2]
+
+		log.Printf("Setting DSN config - group: %s, dbType: %s", groupName, dbType)
 
 		if dsnConfig[groupName] == nil {
 			dsnConfig[groupName] = make(map[string][]string)
