@@ -32,7 +32,7 @@ func InitMySQL(dsnList []string) (*gorm.DB, []string, []string, error) {
 		dbType := parts[1]
 		dsnString := parts[2]
 
-		log.Printf("Setting DSN config - group: %s, dbType: %s", groupName, dbType)
+		log.Printf("Setting DSN config - group: %s, dbType: %s, dsn: %s", groupName, dbType, dsnString)
 
 		if dsnConfig[groupName] == nil {
 			dsnConfig[groupName] = make(map[string][]string)
