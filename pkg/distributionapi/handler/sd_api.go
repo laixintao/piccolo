@@ -192,7 +192,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 	onlyInDB, onlyInRequest := diffSets(existingKeys, currentKeys)
 
 	if len(onlyInDB) != 0 {
-		if err := h.m.Distribution.DeleteByKeysByHolder(onlyInDB, req.Holder, req.Group); err != nil {
+		if err := h.m.Distribution.DeleteKeysByHolder(onlyInDB, req.Holder, req.Group); err != nil {
 			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 				Success: false,
 				Message: "Error when delete keys from DB",

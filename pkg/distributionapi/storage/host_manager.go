@@ -20,11 +20,6 @@ func NewHostManager(db *gorm.DB) *HostManager {
 }
 func (m *HostManager) RefreshHostAddr(hostAddr, group string) error {
 	start := time.Now()
-	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "refresh_host_addr", group).Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "refresh_host_addr", group).Observe(time.Since(start).Seconds())
-	}()
-
 	now := time.Now()
 	host := &model.Host{
 		HostAddr: hostAddr,
@@ -32,20 +27,34 @@ func (m *HostManager) RefreshHostAddr(hostAddr, group string) error {
 		LastSeen: now,
 	}
 
-	return m.db.Clauses(
+	err := m.db.Clauses(
 		dbresolver.Use(group),
+		dbresolver.Write,
 		clause.OnConflict{
 			Columns:   []clause.Column{{Name: "host_addr"}, {Name: "group"}},
 			DoUpdates: clause.AssignmentColumns([]string{"last_seen"}),
 		},
 	).Create(host).Error
+
+	status := "success"
+	if err != nil {
+		status = "fail"
+	}
+	metrics.DBQueryTotal.WithLabelValues("host_tab", "refresh_host_addr", group, status).Inc()
+	metrics.DBQueryDuration.WithLabelValues("host_tab", "refresh_host_addr", group, status).Observe(time.Since(start).Seconds())
+	return err
 }
 
 func (m *HostManager) FindDeadHosts(group string) ([]model.Host, error) {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "find_dead_hosts", group).Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "find_dead_hosts", group).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "find_dead_hosts", group, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "find_dead_hosts", group, status).Observe(time.Since(start).Seconds())
 	}()
 
 	threshold := time.Now().Add(-DEADTIMEOUT)
@@ -55,7 +64,8 @@ func (m *HostManager) FindDeadHosts(group string) ([]model.Host, error) {
 		Model(&model.Host{}).
 		Where("last_seen < ? AND `group` = ?", threshold, group).
 		Find(&deadHosts).Error; err != nil {
-		return nil, fmt.Errorf("failed to find dead hosts: %w", err)
+		retErr = fmt.Errorf("failed to find dead hosts: %w", err)
+		return nil, retErr
 	}
 
 	return deadHosts, nil
@@ -65,9 +75,14 @@ func (m *HostManager) FindDeadHosts(group string) ([]model.Host, error) {
 // This is used by evictor to clean up hosts regardless of their group field value
 func (m *HostManager) FindDeadHostsByMasterResolver(masterResolver string) ([]model.Host, error) {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "find_dead_hosts_by_master", masterResolver).Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "find_dead_hosts_by_master", masterResolver).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "find_dead_hosts_by_master", masterResolver, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "find_dead_hosts_by_master", masterResolver, status).Observe(time.Since(start).Seconds())
 	}()
 
 	threshold := time.Now().Add(-DEADTIMEOUT)
@@ -77,7 +92,8 @@ func (m *HostManager) FindDeadHostsByMasterResolver(masterResolver string) ([]mo
 		Model(&model.Host{}).
 		Where("last_seen < ?", threshold).
 		Find(&deadHosts).Error; err != nil {
-		return nil, fmt.Errorf("failed to find dead hosts from master resolver %s: %w", masterResolver, err)
+		retErr = fmt.Errorf("failed to find dead hosts from master resolver %s: %w", masterResolver, err)
+		return nil, retErr
 	}
 
 	return deadHosts, nil
@@ -85,17 +101,23 @@ func (m *HostManager) FindDeadHostsByMasterResolver(masterResolver string) ([]mo
 
 func (m *HostManager) DeleteHost(host model.Host) error {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "delete_host", host.Group).Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "delete_host", host.Group).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "delete_host", host.Group, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "delete_host", host.Group, status).Observe(time.Since(start).Seconds())
 	}()
 
 	if err := m.db.
-		Clauses(dbresolver.Use(host.Group)).
+		Clauses(dbresolver.Use(host.Group), dbresolver.Write).
 		Where("`host_addr` = ? AND `group` = ?", host.HostAddr, host.Group).
 		Delete(&model.Host{}).Error; err != nil {
-		return fmt.Errorf("failed to delete host %s (group=%s): %w",
+		retErr = fmt.Errorf("failed to delete host %s (group=%s): %w",
 			host.HostAddr, host.Group, err)
+		return retErr
 	}
 	return nil
 }
@@ -104,17 +126,23 @@ func (m *HostManager) DeleteHost(host model.Host) error {
 // This ensures deletion from the correct physical database
 func (m *HostManager) DeleteHostByMasterResolver(host model.Host, masterResolver string) error {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("host_tab", "delete_host_by_master", masterResolver).Inc()
-		metrics.DBQueryDuration.WithLabelValues("host_tab", "delete_host_by_master", masterResolver).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("host_tab", "delete_host_by_master", masterResolver, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("host_tab", "delete_host_by_master", masterResolver, status).Observe(time.Since(start).Seconds())
 	}()
 
 	if err := m.db.
 		Clauses(dbresolver.Use(masterResolver), dbresolver.Write).
 		Where("`host_addr` = ? AND `group` = ?", host.HostAddr, host.Group).
 		Delete(&model.Host{}).Error; err != nil {
-		return fmt.Errorf("failed to delete host %s (group=%s) from master %s: %w",
+		retErr = fmt.Errorf("failed to delete host %s (group=%s) from master %s: %w",
 			host.HostAddr, host.Group, masterResolver, err)
+		return retErr
 	}
 	return nil
 }

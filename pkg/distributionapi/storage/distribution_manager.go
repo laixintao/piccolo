@@ -26,22 +26,31 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	}
 
 	start := time.Now()
-	if err := m.db.Clauses(
+	err := m.db.Clauses(
 		clause.Insert{Modifier: "IGNORE"},
 		dbresolver.Use(group),
-	).CreateInBatches(distributions, MaxBatch).Error; err != nil {
-		return err
+		dbresolver.Write,
+	).CreateInBatches(distributions, MaxBatch).Error
+
+	status := "success"
+	if err != nil {
+		status = "fail"
 	}
-	metrics.DBQueryTotal.WithLabelValues("distribution_tab", "insert", group).Inc()
-	metrics.DBQueryDuration.WithLabelValues("distribution_tab", "insert", group).Observe(time.Since(start).Seconds())
-	return nil
+	metrics.DBQueryTotal.WithLabelValues("distribution_tab", "insert", group, status).Inc()
+	metrics.DBQueryDuration.WithLabelValues("distribution_tab", "insert", group, status).Observe(time.Since(start).Seconds())
+	return err
 }
 
 func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, key string) ([]string, error) {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_holder_by_key", group).Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_holder_by_key", group).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_holder_by_key", group, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_holder_by_key", group, status).Observe(time.Since(start).Seconds())
 	}()
 
 	var holders []string
@@ -52,7 +61,8 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, 
 		Limit(FindKeyMaxResults)
 
 	if err := query.Pluck("holder", &holders).Error; err != nil {
-		return nil, fmt.Errorf("failed to get holders by key %s: %w", key, err)
+		retErr = fmt.Errorf("failed to get holders by key %s: %w", key, err)
+		return nil, retErr
 	}
 
 	return holders, nil
@@ -60,9 +70,14 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, 
 
 func (m *DistributionManager) GetKeysByHolder(group, holder string) ([]string, error) {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_keys_by_holder", group).Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_keys_by_holder", group).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "get_keys_by_holder", group, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_keys_by_holder", group, status).Observe(time.Since(start).Seconds())
 	}()
 
 	var keys []string
@@ -71,41 +86,51 @@ func (m *DistributionManager) GetKeysByHolder(group, holder string) ([]string, e
 		Model(&model.Distribution{}).
 		Where("`holder` = ? AND `group` = ?", holder, group).
 		Pluck("`key`", &keys).Error; err != nil {
-		return nil, err
+		retErr = err
+		return nil, retErr
 	}
 	return keys, nil
 }
 
-func (m *DistributionManager) DeleteByKeysByHolder(keys []string, holder, group string) error {
+func (m *DistributionManager) DeleteKeysByHolder(keys []string, holder, group string) error {
 	if len(keys) == 0 {
 		return nil
 	}
 
 	start := time.Now()
-	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_keys", group).Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_keys", group).Observe(time.Since(start).Seconds())
-	}()
-
-	return m.db.
-		Clauses(dbresolver.Use(group)).
+	err := m.db.
+		Clauses(dbresolver.Use(group), dbresolver.Write).
 		Where("`group` = ? AND `key` IN ? AND holder = ?", group, keys, holder).
 		Delete(&model.Distribution{}).Error
+
+	status := "success"
+	if err != nil {
+		status = "fail"
+	}
+	metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_keys", group, status).Inc()
+	metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_keys", group, status).Observe(time.Since(start).Seconds())
+	return err
 }
 
 func (m *DistributionManager) DeleteByHolder(host model.Host) error {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_holder", host.Group).Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_holder", host.Group).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_holder", host.Group, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_holder", host.Group, status).Observe(time.Since(start).Seconds())
 	}()
 
 	if err := m.db.
-		Clauses(dbresolver.Use(host.Group)).
+		Clauses(dbresolver.Use(host.Group), dbresolver.Write).
 		Where("`holder` = ? AND `group` = ?", host.HostAddr, host.Group).
 		Delete(&model.Distribution{}).Error; err != nil {
-		return fmt.Errorf("failed to delete distributions for holder %s (group=%s): %w",
+		retErr = fmt.Errorf("failed to delete distributions for holder %s (group=%s): %w",
 			host.HostAddr, host.Group, err)
+		return retErr
 	}
 	return nil
 }
@@ -114,17 +139,23 @@ func (m *DistributionManager) DeleteByHolder(host model.Host) error {
 // This ensures deletion from the correct physical database
 func (m *DistributionManager) DeleteByHolderByMasterResolver(host model.Host, masterResolver string) error {
 	start := time.Now()
+	var retErr error
 	defer func() {
-		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_holder_by_master", masterResolver).Inc()
-		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_holder_by_master", masterResolver).Observe(time.Since(start).Seconds())
+		status := "success"
+		if retErr != nil {
+			status = "fail"
+		}
+		metrics.DBQueryTotal.WithLabelValues("distribution_tab", "delete_by_holder_by_master", masterResolver, status).Inc()
+		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "delete_by_holder_by_master", masterResolver, status).Observe(time.Since(start).Seconds())
 	}()
 
 	if err := m.db.
 		Clauses(dbresolver.Use(masterResolver), dbresolver.Write).
 		Where("`holder` = ? AND `group` = ?", host.HostAddr, host.Group).
 		Delete(&model.Distribution{}).Error; err != nil {
-		return fmt.Errorf("failed to delete distributions for holder %s (group=%s) from master %s: %w",
+		retErr = fmt.Errorf("failed to delete distributions for holder %s (group=%s) from master %s: %w",
 			host.HostAddr, host.Group, masterResolver, err)
+		return retErr
 	}
 	return nil
 }
