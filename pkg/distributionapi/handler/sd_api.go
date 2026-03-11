@@ -124,13 +124,13 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	// sort by IP closing to the holder
+	// Pick the closest holder by IP, shuffle the rest randomly
 	sorted := holders
 	start := time.Now()
 	sortDuration := time.Since(start).Seconds()
 
 	if req.RequestHost != "" {
-		sorted, err = sortByLCPv4HostPort(holders, req.RequestHost)
+		sorted, err = closestFirstThenShuffle(holders, req.RequestHost)
 		if err != nil {
 			c.JSON(http.StatusNotFound,
 				gin.H{"message": "error when sort holder's order", "err": err.Error()},
@@ -288,6 +288,44 @@ func lcpBits4(a, b netip.Addr) int {
 		}
 	}
 	return lcp
+}
+
+// closestFirstThenShuffle finds the holder with the longest common prefix (most
+// similar IPv4 address) and moves it to position 0. The rest remain as-is.
+func closestFirstThenShuffle(hostports []string, target string) ([]string, error) {
+	t, err := netip.ParseAddr(target)
+	if err != nil {
+		return nil, fmt.Errorf("parse target %q: %w", target, err)
+	}
+	t = t.Unmap()
+	if !t.Is4() {
+		return nil, fmt.Errorf("target %q is not IPv4", target)
+	}
+
+	if len(hostports) == 0 {
+		return hostports, nil
+	}
+
+	bestIdx := 0
+	bestLCP := -1
+	for i, hp := range hostports {
+		ap, err := netip.ParseAddrPort(hp)
+		if err != nil {
+			return nil, fmt.Errorf("parse %q: %w", hp, err)
+		}
+		ip := ap.Addr().Unmap()
+		if !ip.Is4() {
+			return nil, fmt.Errorf("%q is not IPv4", hp)
+		}
+		lcp := lcpBits4(ip, t)
+		if lcp > bestLCP {
+			bestLCP = lcp
+			bestIdx = i
+		}
+	}
+
+	hostports[0], hostports[bestIdx] = hostports[bestIdx], hostports[0]
+	return hostports, nil
 }
 
 // sortByLCPv4HostPort sorts "ip:port" strings by the longest common prefix (bits)
