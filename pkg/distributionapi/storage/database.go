@@ -1,8 +1,10 @@
 package storage
 
 import (
+	"errors"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,7 +18,7 @@ const (
 	MaxIdleConns    = 10
 	MaxOpenConns    = 100
 	ConnMaxLifetime = time.Hour
-	LogLevel        = logger.Info
+	LogLevel        = logger.Warn
 )
 
 func InitMySQL(dsnList []string) (*gorm.DB, []string, []string, error) {
@@ -26,11 +28,20 @@ func InitMySQL(dsnList []string) (*gorm.DB, []string, []string, error) {
 	for _, d := range dsnList {
 		parts := strings.SplitN(d, ":", 3)
 		if len(parts) != 3 {
-			return nil, nil, nil, fmt.Errorf("invalid DSN format: %s, expected format: group:type:dsn", d)
+			return nil, nil, nil, errors.New("invalid DSN format: expected group:role:dsn")
 		}
 		groupName := parts[0]
 		dbType := parts[1]
 		dsnString := parts[2]
+		if groupName == "" {
+			return nil, nil, nil, errors.New("database group cannot be empty")
+		}
+		if dbType != "master" && dbType != "slave" {
+			return nil, nil, nil, fmt.Errorf("invalid database role %q: expected master or slave", dbType)
+		}
+		if dsnString == "" {
+			return nil, nil, nil, fmt.Errorf("database DSN cannot be empty for group %q", groupName)
+		}
 
 		log.Printf("Setting DSN config - group: %s, dbType: %s", groupName, dbType)
 
@@ -49,17 +60,19 @@ func InitMySQL(dsnList []string) (*gorm.DB, []string, []string, error) {
 			masterResolvers = append(masterResolvers, "master_"+group)
 		}
 	}
+	sort.Strings(groups)
+	sort.Strings(masterResolvers)
 
 	// Get default master DSN as the primary connection
 	defaultMasters, ok := dsnConfig["default"]["master"]
 	if !ok || len(defaultMasters) == 0 {
-		return nil, nil, nil, fmt.Errorf("You must set default:master:dsn for the default db source!")
+		return nil, nil, nil, errors.New("a default:master DSN is required")
 	}
 	defaultDSN := defaultMasters[0]
 
 	// Initialize database connection
 	db, err := gorm.Open(mysql.Open(defaultDSN), &gorm.Config{
-		Logger: logger.Default.LogMode(logger.Info),
+		Logger: logger.Default.LogMode(LogLevel),
 		NowFunc: func() time.Time {
 			return time.Now().Local()
 		},
@@ -127,7 +140,7 @@ func InitMySQL(dsnList []string) (*gorm.DB, []string, []string, error) {
 			} else {
 				resolver = resolver.Register(config, group)
 			}
-			
+
 			// Additionally, register master-only resolver for evictor
 			// This allows evictor to directly operate on master database
 			if len(sources) > 0 {
@@ -140,7 +153,7 @@ func InitMySQL(dsnList []string) (*gorm.DB, []string, []string, error) {
 			}
 		}
 	}
-	
+
 	// Also register master_default for the default group
 	if len(defaultMasters) > 0 {
 		defaultMasterSources := make([]gorm.Dialector, 0, len(defaultMasters))

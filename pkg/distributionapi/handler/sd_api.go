@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"net/http"
 	"net/netip"
-	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -27,7 +26,7 @@ func NewDistributionHandler(m *storage.Manager, log logr.Logger) *DistributionHa
 	}
 }
 
-// AdvertiseImage hanle advertise request
+// AdvertiseImage handles an advertise request.
 // POST /api/v1/distribution/advertise
 func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 	var req model.ImageAdvertiseRequest
@@ -45,6 +44,10 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 			Success: false,
 			Message: "holder is empty!",
 		})
+		return
+	}
+	if err := validateHolder(req.Holder); err != nil {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{Success: false, Message: err.Error()})
 		return
 	}
 
@@ -72,7 +75,7 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
-			Message: "Error when create distribution in batch" + err.Error(),
+			Message: "Failed to create distributions",
 		})
 		return
 	}
@@ -110,7 +113,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key", "key", req.Key)
 		c.JSON(http.StatusInternalServerError, gin.H{
-			"error": "Error when finding holders: " + err.Error(),
+			"error": "Failed to find holders",
 		})
 		return
 	}
@@ -127,19 +130,19 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 	// Pick the closest holder by IP, shuffle the rest randomly
 	sorted := holders
 	start := time.Now()
-	sortDuration := time.Since(start).Seconds()
 
 	if req.RequestHost != "" {
 		sorted, err = closestFirstThenShuffle(holders, req.RequestHost)
 		if err != nil {
-			c.JSON(http.StatusNotFound,
+			c.JSON(http.StatusBadRequest,
 				gin.H{"message": "error when sort holder's order", "err": err.Error()},
 			)
 			return
 		}
 	}
+	sortDuration := time.Since(start).Seconds()
 
-	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "queryed_from_db", len(holders), "sort_cost_seconds", sortDuration)
+	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "queried_from_db", len(holders), "sort_cost_seconds", sortDuration)
 
 	// Get limited holders if count is specified
 	limit := 100
@@ -154,14 +157,15 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		Key:     req.Key,
 		Holders: sorted[:limit],
 		Group:   req.Group,
+		Total:   len(holders),
 	})
 }
 
-// sync api will delete all the holder's key, and then insert the current keys
+// Sync reconciles all keys stored for a holder.
 // POST /api/v1/distribution/sync
 func (h *DistributionHandler) Sync(c *gin.Context) {
 	start := time.Now()
-	var req model.ImageAdvertiseRequest
+	var req model.ImageSyncRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		h.log.Error(err, "failed to bind JSON request")
 		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{
@@ -178,21 +182,28 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		})
 		return
 	}
+	if err := validateHolder(req.Holder); err != nil {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{Success: false, Message: err.Error()})
+		return
+	}
 
 	existingKeys, err := h.m.Distribution.GetKeysByHolder(req.Group, req.Holder)
 	if err != nil {
+		h.log.Error(err, "failed to get keys by holder", "holder", req.Holder, "group", req.Group)
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
 			Message: "Error when delete keys from DB",
 		})
+		return
 	}
 
-	currentKeys := req.Keys
+	currentKeys := *req.Keys
 
 	onlyInDB, onlyInRequest := diffSets(existingKeys, currentKeys)
 
 	if len(onlyInDB) != 0 {
 		if err := h.m.Distribution.DeleteKeysByHolder(onlyInDB, req.Holder, req.Group); err != nil {
+			h.log.Error(err, "failed to delete keys by holder", "holder", req.Holder, "group", req.Group)
 			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 				Success: false,
 				Message: "Error when delete keys from DB",
@@ -218,7 +229,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 			h.log.Error(err, "failed to create distributions", "holder", req.Holder, "count", len(distributions))
 			c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 				Success: false,
-				Message: "Error when create distribution in batch" + err.Error(),
+				Message: "Failed to create distributions",
 			})
 			return
 		}
@@ -233,7 +244,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 	)
 	c.JSON(http.StatusCreated, model.ImageAdvertiseResponse{
 		Success: true,
-		Message: "Distribution created!",
+		Message: "Distribution synchronized!",
 	})
 }
 
@@ -328,63 +339,6 @@ func closestFirstThenShuffle(hostports []string, target string) ([]string, error
 	return hostports, nil
 }
 
-// sortByLCPv4HostPort sorts "ip:port" strings by the longest common prefix (bits)
-// of their IPv4 address with the given target IPv4 address.
-// Ports are ignored for ranking, but returned strings keep the original "ip:port" form.
-func sortByLCPv4HostPort(hostports []string, target string) ([]string, error) {
-	// Parse and validate target as IPv4
-	t, err := netip.ParseAddr(target)
-	if err != nil {
-		return nil, fmt.Errorf("parse target %q: %w", target, err)
-	}
-	t = t.Unmap()
-	if !t.Is4() {
-		return nil, fmt.Errorf("target %q is not IPv4", target)
-	}
-
-	// Parse inputs and precompute LCP
-	type item struct {
-		hostport string // original "ip:port"
-		ip       netip.Addr
-		lcp      int
-	}
-
-	items := make([]item, 0, len(hostports))
-	for _, hp := range hostports {
-		ap, err := netip.ParseAddrPort(hp)
-		if err != nil {
-			return nil, fmt.Errorf("parse %q: %w", hp, err)
-		}
-		ip := ap.Addr().Unmap()
-		if !ip.Is4() {
-			return nil, fmt.Errorf("%q is not IPv4", hp)
-		}
-		items = append(items, item{
-			hostport: hp,
-			ip:       ip,
-			lcp:      lcpBits4(ip, t),
-		})
-	}
-
-	// Sort by LCP desc; tie-breaker by numeric IP, then by port string for stability
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].lcp != items[j].lcp {
-			return items[i].lcp > items[j].lcp
-		}
-		if items[i].ip != items[j].ip {
-			return items[i].ip.Less(items[j].ip)
-		}
-		// Optional: tie-break by port lexicographically; preserves deterministic order
-		return items[i].hostport < items[j].hostport
-	})
-
-	out := make([]string, len(items))
-	for i := range items {
-		out[i] = items[i].hostport
-	}
-	return out, nil
-}
-
 func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 	var req model.KeepAliveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -393,6 +347,10 @@ func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 			Success: false,
 			Message: "Wrong request format: " + err.Error(),
 		})
+		return
+	}
+	if err := validateHolder(req.HostAddr); err != nil {
+		c.JSON(http.StatusBadRequest, model.KeepAliveResponse{Success: false, Message: err.Error()})
 		return
 	}
 
@@ -411,4 +369,15 @@ func (h *DistributionHandler) KeepAlive(c *gin.Context) {
 		Message: "keep alive success",
 	})
 
+}
+
+func validateHolder(holder string) error {
+	addrPort, err := netip.ParseAddrPort(holder)
+	if err != nil {
+		return fmt.Errorf("holder must be an IP address and port: %w", err)
+	}
+	if !addrPort.Addr().Unmap().Is4() {
+		return fmt.Errorf("holder must use IPv4")
+	}
+	return nil
 }

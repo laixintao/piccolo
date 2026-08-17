@@ -2,12 +2,15 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/pprof"
 	"os"
-
-	"log/slog"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/alexflint/go-arg"
 	"github.com/gin-gonic/gin"
@@ -28,6 +31,8 @@ var (
 	date    = "unknown"
 )
 
+const maxRequestBodyBytes = 16 << 20
+
 type GlobalArgs struct {
 	LogLevel slog.Level `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
 	Version  bool       `arg:"-v,--version" help:"show version"`
@@ -37,6 +42,7 @@ type ServerCmd struct {
 	GlobalArgs
 	PiccoloAddress string   `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
 	EnableEvictor  bool     `arg:"--enable-evictor,env:ENABLE_EVICTOR" default:"false" help:"Enable evictor to clean up dead hosts automatically"`
+	EnablePprof    bool     `arg:"--enable-pprof,env:ENABLE_PPROF" default:"false" help:"Expose Go pprof handlers on the HTTP listener"`
 	DbDsnList      []string `arg:"--db-dsn-list,env:DB_DSN_LIST,required" help:"DB DSN list in format '<group>:<dbtype>:<dsn>'. dbtype can be 'master' or 'slave'. Example: 'default:master:user:pass@tcp(host:3306)/db1' 'us-1:master:user:pass@tcp(host:3306)/db2'"`
 }
 
@@ -62,11 +68,22 @@ func main() {
 		}
 	}
 
+	// Preserve the pre-subcommand CLI for existing deployments: options at the
+	// top level are treated as server options. Explicit help still shows the
+	// command overview.
+	if len(os.Args) > 1 && os.Args[1] != "server" && os.Args[1] != "migrate-db" && os.Args[1] != "--help" && os.Args[1] != "-h" {
+		os.Args = append([]string{os.Args[0], "server"}, os.Args[1:]...)
+	}
+
 	args := &Arguments{}
 	parser := arg.MustParse(args)
 
 	// Default to server command if no subcommand specified
 	if args.Server == nil && args.Migrate == nil {
+		if len(os.Args) == 1 && os.Getenv("DB_DSN_LIST") == "" {
+			parser.WriteHelp(os.Stdout)
+			return
+		}
 		// Re-parse with server as default
 		oldArgs := os.Args
 		os.Args = append([]string{os.Args[0], "server"}, os.Args[1:]...)
@@ -76,7 +93,10 @@ func main() {
 	}
 
 	if args.Server != nil {
-		runServer(args.Server)
+		if err := runServer(args.Server); err != nil {
+			fmt.Fprintf(os.Stderr, "piccolo server failed: %v\n", err)
+			os.Exit(1)
+		}
 	} else if args.Migrate != nil {
 		runMigrate(args.Migrate)
 	} else {
@@ -85,7 +105,7 @@ func main() {
 	}
 }
 
-func runServer(args *ServerCmd) {
+func runServer(args *ServerCmd) error {
 	opts := slog.HandlerOptions{
 		AddSource: true,
 		Level:     args.LogLevel,
@@ -96,20 +116,29 @@ func runServer(args *ServerCmd) {
 
 	db, groups, masterResolvers, err := storage.InitMySQL(args.DbDsnList)
 	if err != nil {
-		log.Error(err, "failed to connect to MySQL database")
-		os.Exit(1)
+		return fmt.Errorf("connect to MySQL: %w", err)
 	}
 
 	log.Info("MySQL database connected", "groups", groups, "masterResolvers", masterResolvers)
 
 	dbm := storage.NewManager(db, groups, masterResolvers)
-	distributionHandler := distributionHandler.NewDistributionHandler(dbm, log)
-	defer dbm.Close()
+	apiHandler := distributionHandler.NewDistributionHandler(dbm, log)
+	defer func() {
+		if err := dbm.Close(); err != nil {
+			log.Error(err, "failed to close database")
+		}
+	}()
 
 	log.Info("image store initialized")
 
 	r := gin.Default()
 
+	r.Use(func(c *gin.Context) {
+		if c.Request.Body != nil {
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxRequestBodyBytes)
+		}
+		c.Next()
+	})
 	r.Use(middleware.HandlerMetricsMiddleware())
 
 	registerVersionMetric()
@@ -121,39 +150,42 @@ func runServer(args *ServerCmd) {
 		})
 	})
 
-	// Register pprof endpoints
-	pprofGroup := r.Group("/debug/pprof")
-	{
-		pprofGroup.GET("/", gin.WrapF(pprof.Index))
-		pprofGroup.GET("/cmdline", gin.WrapF(pprof.Cmdline))
-		pprofGroup.GET("/profile", gin.WrapF(pprof.Profile))
-		pprofGroup.POST("/symbol", gin.WrapF(pprof.Symbol))
-		pprofGroup.GET("/symbol", gin.WrapF(pprof.Symbol))
-		pprofGroup.GET("/trace", gin.WrapF(pprof.Trace))
-		pprofGroup.GET("/allocs", gin.WrapH(pprof.Handler("allocs")))
-		pprofGroup.GET("/block", gin.WrapH(pprof.Handler("block")))
-		pprofGroup.GET("/goroutine", gin.WrapH(pprof.Handler("goroutine")))
-		pprofGroup.GET("/heap", gin.WrapH(pprof.Handler("heap")))
-		pprofGroup.GET("/mutex", gin.WrapH(pprof.Handler("mutex")))
-		pprofGroup.GET("/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
+	if args.EnablePprof {
+		pprofGroup := r.Group("/debug/pprof")
+		{
+			pprofGroup.GET("/", gin.WrapF(pprof.Index))
+			pprofGroup.GET("/cmdline", gin.WrapF(pprof.Cmdline))
+			pprofGroup.GET("/profile", gin.WrapF(pprof.Profile))
+			pprofGroup.POST("/symbol", gin.WrapF(pprof.Symbol))
+			pprofGroup.GET("/symbol", gin.WrapF(pprof.Symbol))
+			pprofGroup.GET("/trace", gin.WrapF(pprof.Trace))
+			pprofGroup.GET("/allocs", gin.WrapH(pprof.Handler("allocs")))
+			pprofGroup.GET("/block", gin.WrapH(pprof.Handler("block")))
+			pprofGroup.GET("/goroutine", gin.WrapH(pprof.Handler("goroutine")))
+			pprofGroup.GET("/heap", gin.WrapH(pprof.Handler("heap")))
+			pprofGroup.GET("/mutex", gin.WrapH(pprof.Handler("mutex")))
+			pprofGroup.GET("/threadcreate", gin.WrapH(pprof.Handler("threadcreate")))
+		}
+		log.Info("pprof endpoints registered at /debug/pprof")
 	}
-	log.Info("pprof endpoints registered at /debug/pprof")
 
 	v1 := r.Group("/api/v1")
 	{
-		v1.POST("/keepalive", distributionHandler.KeepAlive)
+		v1.POST("/keepalive", apiHandler.KeepAlive)
 		images := v1.Group("/distribution")
 		{
-			images.POST("/advertise", distributionHandler.AdvertiseImage)
-			images.GET("/findkey", distributionHandler.FindKey)
-			images.POST("/sync", distributionHandler.Sync)
+			images.POST("/advertise", apiHandler.AdvertiseImage)
+			images.GET("/findkey", apiHandler.FindKey)
+			images.POST("/sync", apiHandler.Sync)
 		}
 	}
 
-	log.Info("server starting", "piccolo-address", args.PiccoloAddress, "evictor-enabled", args.EnableEvictor)
+	log.Info("server starting", "piccolo-address", args.PiccoloAddress, "evictor-enabled", args.EnableEvictor, "pprof-enabled", args.EnablePprof)
 
-	ctx := logr.NewContext(context.Background(), log)
-	
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx := logr.NewContext(signalCtx, log)
+
 	// Set evictor enabled metric
 	if args.EnableEvictor {
 		metrics.EvictorEnabled.Set(1)
@@ -164,11 +196,31 @@ func runServer(args *ServerCmd) {
 		log.Info("Evictor disabled, dead hosts will not be cleaned up automatically")
 	}
 
-	// Start server with configured host and port
-	if err := r.Run(args.PiccoloAddress); err != nil {
-		log.Error(err, "server failed to start")
-		os.Exit(1)
+	srv := &http.Server{
+		Addr:              args.PiccoloAddress,
+		Handler:           r,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.ListenAndServe()
+	}()
+
+	select {
+	case err := <-errCh:
+		if err != nil && !errors.Is(err, http.ErrServerClosed) {
+			return fmt.Errorf("serve HTTP: %w", err)
+		}
+	case <-ctx.Done():
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			return fmt.Errorf("shut down HTTP server: %w", err)
+		}
+	}
+	log.Info("Piccolo stopped")
+	return nil
 }
 
 func runMigrate(args *MigrateCmd) {
@@ -182,17 +234,9 @@ func runMigrate(args *MigrateCmd) {
 
 	// Migrate each database
 	for i, dsn := range args.Databases {
-		log.Info("Migrating database", "index", i+1, "total", len(args.Databases), "dsn", dsn)
+		log.Info("Migrating database", "index", i+1, "total", len(args.Databases))
 
-		// For migrate command, use simple single database connection (format: default:master:dsn_string)
-		db, _, _, err := storage.InitMySQL([]string{"default:master:" + dsn})
-		if err != nil {
-			log.Error(err, "failed to connect to database", "index", i+1)
-			os.Exit(1)
-		}
-		log.Info("Database connected", "index", i+1)
-
-		if err := storage.AutoMigrate(db, &model.Distribution{}, &model.Host{}); err != nil {
+		if err := migrateDatabase(dsn); err != nil {
 			log.Error(err, "failed to migrate database schema", "index", i+1)
 			os.Exit(1)
 		}
@@ -200,6 +244,22 @@ func runMigrate(args *MigrateCmd) {
 	}
 
 	log.Info("All databases migration completed successfully!", "total", len(args.Databases))
+}
+
+func migrateDatabase(dsn string) error {
+	// The migration command accepts a plain MySQL DSN and uses it as the
+	// default master connection.
+	db, _, _, err := storage.InitMySQL([]string{"default:master:" + dsn})
+	if err != nil {
+		return err
+	}
+	sqlDB, err := db.DB()
+	if err != nil {
+		return fmt.Errorf("get database connection: %w", err)
+	}
+	defer sqlDB.Close()
+
+	return storage.AutoMigrate(db, &model.Distribution{}, &model.Host{})
 }
 
 func registerVersionMetric() {

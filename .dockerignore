@@ -1,0 +1,10 @@
+.git
+.github
+.idea
+.vscode
+bin
+coverage.*
+*.out
+*.test
+results.bin
+out_targets

@@ -51,8 +51,15 @@ func TestParsePathComponents(t *testing.T) {
 func TestParsePathComponentsInvalidPath(t *testing.T) {
 	t.Parallel()
 
-	_, err := parsePathComponents("example.com", "/v2/spegel-org/spegel/v0.0.1")
-	require.EqualError(t, err, "distribution path could not be parsed")
+	tests := []string{
+		"/v2/spegel-org/spegel/v0.0.1",
+		"/prefix/v2/library/nginx/manifests/latest",
+		"/v2/library/nginx/blobs/not-a-digest",
+	}
+	for _, path := range tests {
+		_, err := parsePathComponents("example.com", path)
+		require.Error(t, err)
+	}
 }
 
 func TestParsePathComponentsMissingRegistry(t *testing.T) {
@@ -60,4 +67,12 @@ func TestParsePathComponentsMissingRegistry(t *testing.T) {
 
 	_, err := parsePathComponents("", "/v2/spegel-org/spegel/manifests/v0.0.1")
 	require.EqualError(t, err, "registry parameter needs to be set for tag references")
+}
+
+func TestReferenceHasLatestTagWithRegistryPort(t *testing.T) {
+	t.Parallel()
+
+	require.True(t, reference{name: "registry.example:5000/library/alpine:latest"}.hasLatestTag())
+	require.False(t, reference{name: "registry.example:5000/library/alpine:3.21"}.hasLatestTag())
+	require.False(t, reference{dgst: digest.FromString("content")}.hasLatestTag())
 }

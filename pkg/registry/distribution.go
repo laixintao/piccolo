@@ -24,11 +24,7 @@ type reference struct {
 }
 
 func (r reference) hasLatestTag() bool {
-	if r.name == "" {
-		return false
-	}
-	_, tag, _ := strings.Cut(r.name, ":")
-	return tag == "latest"
+	return strings.HasSuffix(r.name, ":latest")
 }
 
 // Package is used to parse components from requests which comform with the OCI distribution spec.
@@ -39,9 +35,9 @@ func (r reference) hasLatestTag() bool {
 var (
 	nameRegex           = regexp.MustCompile(`([a-z0-9]+([._-][a-z0-9]+)*(/[a-z0-9]+([._-][a-z0-9]+)*)*)`)
 	tagRegex            = regexp.MustCompile(`([a-zA-Z0-9_][a-zA-Z0-9._-]{0,127})`)
-	manifestRegexTag    = regexp.MustCompile(`/v2/` + nameRegex.String() + `/manifests/` + tagRegex.String() + `$`)
-	manifestRegexDigest = regexp.MustCompile(`/v2/` + nameRegex.String() + `/manifests/(.*)`)
-	blobsRegexDigest    = regexp.MustCompile(`/v2/` + nameRegex.String() + `/blobs/(.*)`)
+	manifestRegexTag    = regexp.MustCompile(`^/v2/` + nameRegex.String() + `/manifests/` + tagRegex.String() + `$`)
+	manifestRegexDigest = regexp.MustCompile(`^/v2/` + nameRegex.String() + `/manifests/(.*)$`)
+	blobsRegexDigest    = regexp.MustCompile(`^/v2/` + nameRegex.String() + `/blobs/(.*)$`)
 )
 
 func parsePathComponents(originalRegistry, path string) (reference, error) {
@@ -60,18 +56,26 @@ func parsePathComponents(originalRegistry, path string) (reference, error) {
 	}
 	comps = manifestRegexDigest.FindStringSubmatch(path)
 	if len(comps) == 6 {
+		dgst := digest.Digest(comps[5])
+		if err := dgst.Validate(); err != nil {
+			return reference{}, fmt.Errorf("invalid manifest digest: %w", err)
+		}
 		ref := reference{
 			kind:             referenceKindManifest,
-			dgst:             digest.Digest(comps[5]),
+			dgst:             dgst,
 			originalRegistry: originalRegistry,
 		}
 		return ref, nil
 	}
 	comps = blobsRegexDigest.FindStringSubmatch(path)
 	if len(comps) == 6 {
+		dgst := digest.Digest(comps[5])
+		if err := dgst.Validate(); err != nil {
+			return reference{}, fmt.Errorf("invalid blob digest: %w", err)
+		}
 		ref := reference{
 			kind:             referenceKindBlob,
-			dgst:             digest.Digest(comps[5]),
+			dgst:             dgst,
 			originalRegistry: originalRegistry,
 		}
 		return ref, nil

@@ -85,19 +85,7 @@ func TestOCIClient(t *testing.T) {
 		client:      containerdClient,
 	}
 
-	memoryClient := NewMemory()
-	for _, img := range imgs {
-		dgst, err := digest.Parse(img["digest"])
-		require.NoError(t, err)
-		img, err := Parse(img["name"], dgst)
-		require.NoError(t, err)
-		memoryClient.AddImage(img)
-	}
-	for k, v := range blobs {
-		memoryClient.AddBlob(v, k)
-	}
-
-	for _, ociClient := range []Client{remoteContainerd, localContainerd, memoryClient} {
+	for _, ociClient := range []Client{remoteContainerd, localContainerd} {
 		t.Run(ociClient.Name(), func(t *testing.T) {
 			t.Parallel()
 

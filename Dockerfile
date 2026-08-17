@@ -14,11 +14,15 @@ COPY . .
 RUN VERSION_VALUE="${VERSION:-v$(cat VERSION)}" \
     && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath \
       -ldflags "-s -w -X main.version=${VERSION_VALUE} -X main.commit=${COMMIT} -X main.date=${DATE}" \
-      -o /out/pi ./cmd/pi
+      -o /out/piccolo ./cmd/piccolo
 
 FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates \
+    && addgroup -S piccolo \
+    && adduser -S -G piccolo piccolo
 WORKDIR /app
-COPY --from=builder /out/pi ./pi
-ENTRYPOINT ["./pi"]
+COPY --from=builder /out/piccolo ./piccolo
+USER piccolo
+EXPOSE 7789
+ENTRYPOINT ["./piccolo"]
 CMD ["--help"]

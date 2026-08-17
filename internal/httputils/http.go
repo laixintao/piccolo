@@ -15,8 +15,27 @@ import (
 
 var ErrNotFound = errors.New("404 not found")
 
-const INITIAL_BACKOFF = 200 * time.Millisecond
-const MAX_BACKOFF = 10 * time.Second
+const (
+	initialBackoff = 200 * time.Millisecond
+	maxBackoff     = 10 * time.Second
+)
+
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	c.cancel()
+	return c.ReadCloser.Close()
+}
+
+const maxErrorBodyBytes = 64 << 10
+
+func readErrorBody(body io.Reader) string {
+	b, _ := io.ReadAll(io.LimitReader(body, maxErrorBodyBytes))
+	return string(b)
+}
 
 func DoRequestWithRetry(
 	ctx context.Context,
@@ -36,14 +55,19 @@ func DoRequestWithRetry(
 		client = http.DefaultClient
 	}
 
-	backoff := INITIAL_BACKOFF
+	backoff := initialBackoff
 	var lastErr error
 	attempt := 0
 
 	log := logr.FromContextOrDiscard(ctx)
 
 	ctx, cancelTotal := context.WithTimeout(ctx, totalTimeout)
-	defer cancelTotal()
+	keepContextAlive := false
+	defer func() {
+		if !keepContextAlive {
+			cancelTotal()
+		}
+	}()
 
 	for {
 		attempt++
@@ -75,9 +99,9 @@ func DoRequestWithRetry(
 		}
 
 		resp, err := client.Do(req)
-		cancelReq()
 
 		if err != nil {
+			cancelReq()
 			lastErr = err
 			log.Error(err, "http request get error", "attemp", attempt)
 			if metrics != nil {
@@ -86,27 +110,38 @@ func DoRequestWithRetry(
 		} else {
 			switch {
 			case resp.StatusCode >= 500:
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, maxErrorBodyBytes))
 				resp.Body.Close()
+				cancelReq()
 				lastErr = fmt.Errorf("server error: %s", resp.Status)
 				log.Info("http request status code 5xx", "attemp", attempt, "status_code", resp.Status)
 				if metrics != nil {
 					metrics.WithLabelValues("fail").Inc()
 				}
 			case resp.StatusCode == http.StatusNotFound:
-				respBody, _ := io.ReadAll(resp.Body)
+				respBody := readErrorBody(resp.Body)
 				resp.Body.Close()
+				cancelReq()
 				if metrics != nil {
 					metrics.WithLabelValues("fail").Inc()
 				}
 				return nil, fmt.Errorf("url: %s, err: %w, respBody: %s", url, ErrNotFound, respBody)
 			case resp.StatusCode >= 400:
-				respBody, _ := io.ReadAll(resp.Body)
+				respBody := readErrorBody(resp.Body)
 				resp.Body.Close()
+				cancelReq()
 				if metrics != nil {
 					metrics.WithLabelValues("fail").Inc()
 				}
-				return nil, fmt.Errorf("client error: %s, body: %s", resp.Status, string(respBody))
+				return nil, fmt.Errorf("client error: %s, body: %s", resp.Status, respBody)
 			default:
+				// The request context must remain alive while the caller reads the
+				// response body. Cancel it when the body is closed instead.
+				resp.Body = &cancelOnClose{ReadCloser: resp.Body, cancel: func() {
+					cancelReq()
+					cancelTotal()
+				}}
+				keepContextAlive = true
 				if metrics != nil {
 					metrics.WithLabelValues("success").Inc()
 				}
@@ -123,10 +158,10 @@ func DoRequestWithRetry(
 		case <-time.After(backoff):
 		}
 
-		if backoff < MAX_BACKOFF {
+		if backoff < maxBackoff {
 			backoff *= 2
-			if backoff > MAX_BACKOFF {
-				backoff = MAX_BACKOFF
+			if backoff > maxBackoff {
+				backoff = maxBackoff
 			}
 		}
 	}

@@ -1,0 +1,44 @@
+services:
+  mysql:
+    image: mysql:8.4
+    environment:
+      MYSQL_DATABASE: piccolo
+      MYSQL_PASSWORD: piccolo
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_USER: piccolo
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    volumes:
+      - piccolo-mysql:/var/lib/mysql
+
+  migrate:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      mysql:
+        condition: service_healthy
+    command:
+      - migrate-db
+      - piccolo:piccolo@tcp(mysql:3306)/piccolo?charset=utf8mb4&parseTime=True&loc=Local
+
+  piccolo:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    command:
+      - server
+      - --db-dsn-list
+      - default:master:piccolo:piccolo@tcp(mysql:3306)/piccolo?charset=utf8mb4&parseTime=True&loc=Local
+      - --enable-evictor
+    ports:
+      - "7789:7789"
+
+volumes:
+  piccolo-mysql:

@@ -1,16 +1,17 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"time"
-
-	"context"
 	"log/slog"
 	"net/http"
 	"net/http/pprof"
 	"net/url"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/alexflint/go-arg"
 	"github.com/go-logr/logr"
@@ -41,19 +42,18 @@ type Arguments struct {
 	Registries                  []url.URL     `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
 	LogLevel                    slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
 	ResolveLatestTag            bool          `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
-	PiccoloAddress              url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
-	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" help:"pi will update all image states to piccolo for every X minutes."`
+	PiccoloAddress              url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS,required" help:"Piccolo API URL for central service discovery"`
+	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" default:"60" help:"Minutes between full image-state syncs."`
 	MaxUploadConnections        int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
-	MaxUploadBlobBytesPerSecond float64       `arg:"--max-upload-blob-bytes-per-second,env:PI_MAX_UPLOAD_BLOB_BYTES_PER_SECOND" default:"1073741824" help:"Max upload speed limition for upload blobs to other pi nodes."`
+	MaxUploadBlobBytesPerSecond float64       `arg:"--max-upload-blob-bytes-per-second,env:PI_MAX_UPLOAD_BLOB_BYTES_PER_SECOND" default:"1073741824" help:"Maximum aggregate upload rate to peers, in bytes per second."`
 	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"2s" help:"Max duration spent finding a mirror."`
 	MirrorResolveRetries        int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
 	Group                       string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
+	EnablePprof                 bool          `arg:"--enable-pprof,env:ENABLE_PPROF" default:"false" help:"Expose Go pprof handlers on the metrics listener."`
 	Version                     bool          `arg:"-v,--version" help:"show version"`
 }
 
 func main() {
-	fmt.Println("Hello, Pi!")
-
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-v" {
 			fmt.Printf("Pi Version: %s\nCommit: %s\nBuilt: %s\n", version, commit, date)
@@ -63,6 +63,10 @@ func main() {
 
 	args := &Arguments{}
 	arg.MustParse(args)
+	if err := validateArgs(args); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid arguments: %v\n", err)
+		os.Exit(2)
+	}
 
 	opts := slog.HandlerOptions{
 		AddSource: true,
@@ -71,10 +75,22 @@ func main() {
 	handler := slog.NewTextHandler(os.Stdout, &opts)
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init")
-	ctx := logr.NewContext(context.Background(), log)
+	signalCtx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	ctx := logr.NewContext(signalCtx, log)
 	ociClient, err := oci.NewContainerd(ctx, args.ContainerdSock, args.ContainerdNamespace, args.Registries, oci.WithContentPath(args.ContainerdContentPath))
 	if err != nil {
 		log.Error(err, "run exit with error")
+		os.Exit(1)
+	}
+	defer func() {
+		if err := ociClient.Close(); err != nil {
+			log.Error(err, "failed to close containerd client")
+		}
+	}()
+	if err := ociClient.Verify(ctx); err != nil {
+		log.Error(err, "containerd verification failed")
+		_ = ociClient.Close()
 		os.Exit(1)
 	}
 	log.Info("containerd sdk init")
@@ -82,17 +98,18 @@ func main() {
 	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group)
 	if err != nil {
 		log.Error(err, "NewPiccoloServiceDiscover error")
+		_ = ociClient.Close()
 		os.Exit(1)
 	}
 
 	g, ctx := errgroup.WithContext(ctx)
 
-	err = startMetricsServer(ctx, args.MetricsAddr, g)
+	err = startMetricsServer(ctx, args.MetricsAddr, args.EnablePprof, g)
 	if err != nil {
 		log.Error(err, "Error when start Pi Server")
 		os.Exit(1)
 	}
-	log.Info("Metrics server started", "address", args.PiAddr)
+	log.Info("Metrics server started", "address", args.MetricsAddr, "pprof-enabled", args.EnablePprof)
 
 	// Pi Server
 	err = startPiServer(ctx, args.Group, args.MaxUploadConnections, args.MaxUploadBlobBytesPerSecond, ociClient, piccoloSD, log, args.PiAddr, g)
@@ -125,6 +142,26 @@ func main() {
 		log.Error(err, "Error when g.Wait()")
 		os.Exit(1)
 	}
+	log.Info("Pi stopped")
+}
+
+func validateArgs(args *Arguments) error {
+	if args.FullRefreshMinutes <= 0 {
+		return errors.New("full-refresh-minutes must be greater than zero")
+	}
+	if args.MaxUploadConnections <= 0 {
+		return errors.New("max-upload-connections must be greater than zero")
+	}
+	if args.MaxUploadBlobBytesPerSecond <= 0 {
+		return errors.New("max-upload-blob-bytes-per-second must be greater than zero")
+	}
+	if args.MirrorResolveTimeout <= 0 {
+		return errors.New("mirror-resolve-timeout must be greater than zero")
+	}
+	if args.MirrorResolveRetries <= 0 {
+		return errors.New("mirror-resolve-retries must be greater than zero")
+	}
+	return nil
 }
 
 func startPiServer(ctx context.Context, group string, maxConnection int,
@@ -180,6 +217,7 @@ func startRegistryServer(ctx context.Context,
 
 func startMetricsServer(ctx context.Context,
 	metricsAddr string,
+	enablePprof bool,
 	g *errgroup.Group,
 ) error {
 	metrics.Register()
@@ -196,19 +234,23 @@ func startMetricsServer(ctx context.Context,
 
 	mux := http.NewServeMux()
 	mux.Handle("/metrics", promhttp.HandlerFor(metrics.DefaultGatherer, promhttp.HandlerOpts{}))
-	mux.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
-	mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
-	mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
-	mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
-	mux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
-	mux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
-	mux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
-	mux.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
-	mux.Handle("/debug/pprof/block", pprof.Handler("block"))
-	mux.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	if enablePprof {
+		mux.Handle("/debug/pprof/", http.HandlerFunc(pprof.Index))
+		mux.Handle("/debug/pprof/profile", http.HandlerFunc(pprof.Profile))
+		mux.Handle("/debug/pprof/trace", http.HandlerFunc(pprof.Trace))
+		mux.Handle("/debug/pprof/symbol", http.HandlerFunc(pprof.Symbol))
+		mux.Handle("/debug/pprof/heap", pprof.Handler("heap"))
+		mux.Handle("/debug/pprof/allocs", pprof.Handler("allocs"))
+		mux.Handle("/debug/pprof/goroutine", pprof.Handler("goroutine"))
+		mux.Handle("/debug/pprof/threadcreate", pprof.Handler("threadcreate"))
+		mux.Handle("/debug/pprof/block", pprof.Handler("block"))
+		mux.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
+	}
 	metricsSrv := &http.Server{
-		Addr:    metricsAddr,
-		Handler: mux,
+		Addr:              metricsAddr,
+		Handler:           mux,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	g.Go(func() error {
 		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {

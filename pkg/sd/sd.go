@@ -11,8 +11,6 @@ import (
 	"net/url"
 	"path"
 	"strconv"
-	"strings"
-
 	"time"
 
 	"github.com/go-logr/logr"
@@ -39,6 +37,20 @@ type PiccoloServiceDiscover struct {
 }
 
 func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr string, group string) (*PiccoloServiceDiscover, error) {
+	if piccoloAddress.Scheme != "http" && piccoloAddress.Scheme != "https" {
+		return nil, fmt.Errorf("piccolo API URL must use http or https")
+	}
+	if piccoloAddress.Host == "" {
+		return nil, fmt.Errorf("piccolo API URL must include a host")
+	}
+	addrPort, err := netip.ParseAddrPort(piAddr)
+	if err != nil {
+		return nil, fmt.Errorf("invalid Pi listen address %q: %w", piAddr, err)
+	}
+	if !addrPort.Addr().Unmap().Is4() {
+		return nil, fmt.Errorf("Pi listen address must use IPv4")
+	}
+
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
@@ -55,7 +67,7 @@ func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr s
 		},
 	}
 	return &PiccoloServiceDiscover{
-		piccoloAddress: *&piccoloAddress,
+		piccoloAddress: piccoloAddress,
 		log:            log,
 		httpClient:     httpClient,
 		piAddr:         piAddr,
@@ -64,12 +76,28 @@ func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr s
 }
 
 func (p PiccoloServiceDiscover) Ready(ctx context.Context) (bool, error) {
-	return true, nil
+	u := p.piccoloAddress
+	u.Path = path.Join(u.Path, "healthz")
+	resp, err := httputils.DoRequestWithRetry(
+		ctx,
+		http.MethodGet,
+		u.String(),
+		nil,
+		map[string]string{"Accept": "application/json"},
+		time.Second,
+		time.Second,
+		p.httpClient,
+	)
+	if err != nil {
+		return false, err
+	}
+	defer resp.Body.Close()
+	return resp.StatusCode == http.StatusOK, nil
 }
 
 func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) error {
 	log := logr.FromContextOrDiscard(ctx)
-	log.Info("Advertise keys...", "keys", keys)
+	log.Info("Advertise keys", "count", len(keys))
 	url := p.piccoloAddress
 	url.Path = path.Join(url.Path, "api", "v1", "distribution", "advertise")
 	request := model.ImageAdvertiseRequest{
@@ -111,8 +139,6 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 
 func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error) {
 	p.log.Info("Resolve key", "key", key, "count", count)
-	deadline, _ := ctx.Deadline()
-	fmt.Printf("Enter resolve key The context left %s \n", deadline)
 	log := logr.FromContextOrDiscard(ctx)
 	u := p.piccoloAddress
 	u.Path = path.Join(u.Path, "api", "v1", "distribution", "findkey")
@@ -120,7 +146,8 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	params.Add("group", p.group)
 	params.Add("key", key)
 	params.Add("count", strconv.Itoa(count))
-	params.Add("request_host", strings.Split(p.piAddr, ":")[0])
+	requestAddr, _ := netip.ParseAddrPort(p.piAddr)
+	params.Add("request_host", requestAddr.Addr().String())
 	u.RawQuery = params.Encode()
 
 	resolveTimer := prometheus.NewTimer(metrics.ResolveDurHistogram.WithLabelValues())
@@ -162,12 +189,12 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 
 func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
 	log := logr.FromContextOrDiscard(ctx)
-	log.Info("Sync keys...", "keys", keys)
+	log.Info("Sync keys", "count", len(keys))
 	url := p.piccoloAddress
 	url.Path = path.Join(url.Path, "api", "v1", "distribution", "sync")
-	request := model.ImageAdvertiseRequest{
+	request := model.ImageSyncRequest{
 		Holder: p.piAddr,
-		Keys:   keys,
+		Keys:   &keys,
 		Group:  p.group,
 	}
 	body, err := json.Marshal(request)
@@ -187,7 +214,7 @@ func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
 		p.httpClient,
 	)
 	if err != nil {
-		log.Error(err, "Advertise error", "requestBody", body)
+		log.Error(err, "Sync error", "key-count", len(keys))
 		return err
 	}
 	defer resp.Body.Close()
@@ -208,7 +235,7 @@ func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
 	url.Path = path.Join(url.Path, "api", "v1", "keepalive")
 	request := model.KeepAliveRequest{
 		HostAddr: p.piAddr,
-		Group: p.group,
+		Group:    p.group,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -228,7 +255,7 @@ func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
 		metrics.KeepAliveTotal,
 	)
 	if err != nil {
-		log.Error(err, "SD Keepalive Error", "requestBody", body)
+		log.Error(err, "SD keepalive error")
 		return err
 	}
 	defer resp.Body.Close()

@@ -1,7 +1,6 @@
 package oci
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -9,8 +8,8 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
-	"text/template"
 
 	semver "github.com/Masterminds/semver/v3"
 	"github.com/containerd/containerd"
@@ -22,10 +21,6 @@ import (
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
-)
-
-const (
-	backupDir = "_backup"
 )
 
 var _ Client = &Containerd{}
@@ -47,6 +42,9 @@ func WithContentPath(path string) Option {
 }
 
 func NewContainerd(ctx context.Context, sock, namespace string, registries []url.URL, opts ...Option) (*Containerd, error) {
+	if err := validateRegistries(registries); err != nil {
+		return nil, err
+	}
 	listFilter, eventFilter := createFilters(registries)
 	log := logr.FromContextOrDiscard(ctx)
 	log.Info("ContainerdClient Created.", "listFilter", listFilter, "eventFilter", eventFilter)
@@ -70,6 +68,13 @@ func (c *Containerd) Client() (*containerd.Client, error) {
 		c.client, err = c.clientGetter()
 	}
 	return c.client, err
+}
+
+func (c *Containerd) Close() error {
+	if c.client == nil {
+		return nil
+	}
+	return c.client.Close()
 }
 
 func (c *Containerd) Name() string {
@@ -99,15 +104,14 @@ func (c *Containerd) Verify(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	constraint, err := semver.NewConstraint(">1-0")
+	constraint, err := semver.NewConstraint(">= 1.0.0")
 	if err != nil {
 		return err
 	}
-	if constraint.Check(version) {
-		log.Info("unable to verify status response", "runtime_version", version.String())
-		return nil
+	if !constraint.Check(version) {
+		return fmt.Errorf("unsupported containerd runtime version %s", version)
 	}
-
+	log.Info("containerd connection verified", "runtime_version", version.String())
 	return nil
 }
 
@@ -138,19 +142,31 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 				var img Image
 				imageName, eventType, err := getEventImage(envelope.Event)
 				if err != nil {
-					errCh <- err
+					select {
+					case errCh <- err:
+					case <-ctx.Done():
+						return
+					}
 					continue
 				}
 				switch eventType {
 				case CreateEvent, UpdateEvent:
 					cImg, err := client.GetImage(ctx, imageName)
 					if err != nil {
-						errCh <- err
+						select {
+						case errCh <- err:
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 					img, err = Parse(cImg.Name(), cImg.Target().Digest)
 					if err != nil {
-						errCh <- err
+						select {
+						case errCh <- err:
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 				case DeleteEvent:
@@ -160,7 +176,11 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 					log := logr.FromContextOrDiscard(ctx)
 					log.Info("Delete image", "imageName", imageName)
 				}
-				imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}
+				select {
+				case imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}:
+				case <-ctx.Done():
+					return
+				}
 			} // select
 		} // for
 	}() // goroutine
@@ -293,7 +313,8 @@ func getEventImage(e typeurl.Any) (string, EventType, error) {
 func createFilters(registries []url.URL) (string, string) {
 	registryHosts := []string{}
 	for _, registry := range registries {
-		registryHosts = append(registryHosts, strings.ReplaceAll(registry.Host, `.`, `\\.`))
+		escapedHost := regexp.QuoteMeta(registry.Host)
+		registryHosts = append(registryHosts, strings.ReplaceAll(escapedHost, `\`, `\\`))
 	}
 	listFilter := fmt.Sprintf(`name~="^(%s)/"`, strings.Join(registryHosts, "|"))
 	eventFilter := fmt.Sprintf(`topic~="/images/create|/images/update|/images/delete",event.%s`, listFilter)
@@ -303,6 +324,9 @@ func createFilters(registries []url.URL) (string, string) {
 func validateRegistries(urls []url.URL) error {
 	errs := []error{}
 	for _, u := range urls {
+		if u.Host == "" {
+			errs = append(errs, fmt.Errorf("invalid registry url host cannot be empty: %s", u.String()))
+		}
 		if u.Scheme != "http" && u.Scheme != "https" {
 			errs = append(errs, fmt.Errorf("invalid registry url scheme must be http or https: %s", u.String()))
 		}
@@ -317,40 +341,4 @@ func validateRegistries(urls []url.URL) error {
 		}
 	}
 	return errors.Join(errs...)
-}
-
-func templateHosts(registryURL url.URL, mirrorURLs []url.URL, capabilities []string) (string, error) {
-	server := registryURL.String()
-	if registryURL.String() == "https://docker.io" {
-		server = "https://registry-1.docker.io"
-	}
-	capabilitiesStr := strings.Join(capabilities, "', '")
-	capabilitiesStr = fmt.Sprintf("['%s']", capabilitiesStr)
-	hc := struct {
-		Server       string
-		Capabilities string
-		MirrorURLs   []url.URL
-	}{
-		Server:       server,
-		Capabilities: capabilitiesStr,
-		MirrorURLs:   mirrorURLs,
-	}
-	tmpl, err := template.New("").Parse(`server = '{{ .Server }}'
-{{ range .MirrorURLs }}
-[host.'{{ .String }}']
-capabilities = {{ $.Capabilities }}
-{{ end }}`)
-	if err != nil {
-		return "", err
-	}
-	buf := bytes.NewBuffer(nil)
-	err = tmpl.Execute(buf, hc)
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(buf.String()), nil
-}
-
-type hostFile struct {
-	Hosts map[string]interface{} `toml:"host"`
 }

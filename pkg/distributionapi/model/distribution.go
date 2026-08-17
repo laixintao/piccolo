@@ -36,6 +36,14 @@ type ImageAdvertiseRequest struct {
 	Group  string   `json:"group" binding:"required"`
 }
 
+// ImageSyncRequest uses a pointer for Keys so an explicitly empty array can
+// clear a holder while an omitted or null keys field is rejected.
+type ImageSyncRequest struct {
+	Holder string    `json:"holder" binding:"required"`
+	Keys   *[]string `json:"keys" binding:"required"`
+	Group  string    `json:"group" binding:"required"`
+}
+
 type ImageAdvertiseResponse struct {
 	Success bool   `json:"success"`
 	Message string `json:"message"`
@@ -55,12 +63,12 @@ type FindKeyRequest struct {
 
 type FindKeyResponse struct {
 	Key     string   `json:"key"`
-	Group   string   `form:"group" binding:"required"`
+	Group   string   `json:"group"`
 	Holders []string `json:"holders"`
 	Total   int      `json:"total"`
 }
 
 type KeepAliveRequest struct {
 	HostAddr string `json:"host" binding:"required"`
-	Group    string `form:"group" binding:"required"`
+	Group    string `json:"group" binding:"required"`
 }

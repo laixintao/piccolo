@@ -66,7 +66,7 @@ func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
 
 	}()
 	log := logr.FromContextOrDiscard(ctx)
-	
+
 	// Iterate through all master resolvers to find and evict dead hosts
 	// This ensures we clean up all hosts in each physical master database,
 	// regardless of their group field value
@@ -82,14 +82,14 @@ func evictDeadHosts(ctx context.Context, m *storage.Manager) error {
 		for _, dh := range deadHosts {
 			metrics.EvictorDeletedHostTotal.WithLabelValues().Inc()
 			log.Info("Evict dead host", "host", dh.HostAddr, "group", dh.Group, "masterResolver", masterResolver)
-			
+
 			// Delete distributions for this host from the master database
 			err := m.Distribution.DeleteByHolderByMasterResolver(dh, masterResolver)
 			if err != nil {
 				log.Error(err, "Error when delete distributions by holder", "holder", dh.HostAddr, "group", dh.Group, "masterResolver", masterResolver)
 				continue
 			}
-			
+
 			// Delete the host from the master database
 			err = m.Host.DeleteHostByMasterResolver(dh, masterResolver)
 			if err != nil {

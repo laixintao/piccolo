@@ -94,8 +94,10 @@ func (r *Registry) Server(addr string) (*http.Server, error) {
 		return nil, err
 	}
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: m,
+		Addr:              addr,
+		Handler:           m,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	return srv, nil
 }
@@ -181,7 +183,7 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 
 	defer func() {
 		cacheType := "hit"
-		if rw.Status() != http.StatusOK {
+		if rw.Status() < http.StatusOK || rw.Status() >= http.StatusMultipleChoices {
 			cacheType = "miss"
 		}
 		metrics.MirrorRequestsTotal.WithLabelValues(ref.originalRegistry, cacheType, string(ref.kind)).Inc()
@@ -212,7 +214,7 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 		select {
 		case <-req.Context().Done():
 			// Request has been closed by server or client. No use continuing.
-			rw.WriteError(http.StatusNotFound, fmt.Errorf("mirroring for image component %s has been cancelled: %w", key, resolveCtx.Err()))
+			rw.WriteError(http.StatusNotFound, fmt.Errorf("mirroring for image component %s has been cancelled: %w", key, req.Context().Err()))
 			return
 		default:
 			err := r.try(peer, rw, req)
@@ -245,20 +247,19 @@ func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Req
 	proxy := httputil.NewSingleHostReverseProxy(u)
 	proxy.BufferPool = r.bufferPool
 	proxy.Transport = r.transport
-	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, err error) {
+	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
 		r.log.Error(err, "request to mirror failed")
-		http.Error(rw, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("expected mirror to respond with 200 OK but received: %s", resp.Status)
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("expected mirror to respond with 2xx but received: %s", resp.Status)
 		}
 		succeeded = true
 		return nil
 	}
 	proxy.ServeHTTP(rw, req)
 	if !succeeded {
-		return errors.New("Fail to mirror request")
+		return errors.New("failed to mirror request")
 	}
 	return nil
 }

@@ -31,10 +31,11 @@ type response struct {
 }
 
 func (r *response) WriteHeader(statusCode int) {
-	if !r.writtenHeader {
-		r.writtenHeader = true
-		r.status = statusCode
+	if r.writtenHeader {
+		return
 	}
+	r.writtenHeader = true
+	r.status = statusCode
 	r.ResponseWriter.WriteHeader(statusCode)
 }
 

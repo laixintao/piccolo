@@ -29,26 +29,29 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 
 	fullUpdatesCh := make(chan string, 10)
 	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
+	// Reconcile images that existed before the event subscription started.
+	fullUpdatesCh <- "startup"
 
 	// random delay avoid all same Pi updates at the same time
 	go startIntervalSync(ctx, fullRefreshMinutes, fullUpdatesCh)
 	go startKeepAlive(ctx, sd)
 
 	for {
-		ociCtx, calcenOciClient := context.WithCancel(ctx)
+		ociCtx, cancelOCIClient := context.WithCancel(ctx)
 		eventCh, errCh, cErrCh, err := ociClient.Subscribe(ociCtx)
 
-		metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
 		if err != nil {
 			metrics.ContainerdSubscribeTotal.WithLabelValues("fail").Add(1)
 			log.Error(err, "Error when subscribe events from containerd, restart tracker.")
 		} else {
+			metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
 			log.Info("Subscribed from containerd")
 
 		SubscribeLoop:
 			for {
 				select {
 				case <-ctx.Done():
+					cancelOCIClient()
 					return nil
 
 				case event, ok := <-eventCh:
@@ -89,7 +92,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 			} // subscribe for
 		}
 
-		calcenOciClient()
+		cancelOCIClient()
 		log.Info("the subscriber need to be restarted, but I'll wait 3 seconds...")
 
 		select {
@@ -113,7 +116,9 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 
 	flush := func() {
 		if len(buffer) > 0 {
-			all(ctx, ociClient, sd, resolveLatestTag)
+			if err := all(ctx, ociClient, sd, resolveLatestTag); err != nil {
+				log.Error(err, "full image-state sync failed", "event-count", len(buffer))
+			}
 			buffer = nil
 			timer.Stop()
 		}
@@ -121,6 +126,8 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 
 	for {
 		select {
+		case <-ctx.Done():
+			return
 		case e := <-events:
 			buffer = append(buffer, e)
 			if len(buffer) == 1 {
@@ -159,7 +166,7 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 		if !(!resolveLatestTag && img.IsLatestTag()) {
 			if tagName, ok := img.TagName(); ok {
 				keys[tagName] = img.Registry
-				metrics.AdvertisedImageDigests.WithLabelValues(img.Registry).Add(1)
+				metrics.AdvertisedImageTags.WithLabelValues(img.Registry).Add(1)
 			}
 		}
 
@@ -227,6 +234,10 @@ func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ev
 func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh chan<- string) {
 	log := logr.FromContextOrDiscard(ctx)
 	interval := time.Duration(intervalMinutes) * time.Minute
+	if interval <= 0 {
+		log.Error(fmt.Errorf("full refresh interval must be positive"), "Periodic sync disabled", "intervalMinutes", intervalMinutes)
+		return
+	}
 	sleepDuration := randduration.RandomDuration(interval)
 	log.Info("fullUpdatesTimer will be reset in minutes", "minutes", sleepDuration)
 
@@ -238,7 +249,11 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 	}
 
 	log.Info("Interval update first trigger full sync, then trigger for every", "minutes", intervalMinutes)
-	fullUpdatesCh <- "ticker"
+	select {
+	case fullUpdatesCh <- "ticker":
+	case <-ctx.Done():
+		return
+	}
 
 	// update for const interval
 	expirationTicker := time.NewTicker(interval)
@@ -248,7 +263,11 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 		select {
 		case <-expirationTicker.C:
 			log.Info("By Ticker: Running scheduled image state update")
-			fullUpdatesCh <- "ticker"
+			select {
+			case fullUpdatesCh <- "ticker":
+			case <-ctx.Done():
+				return
+			}
 		case <-ctx.Done():
 			return
 		}

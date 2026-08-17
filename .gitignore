@@ -7,6 +7,12 @@
 *.dll
 *.so
 *.dylib
+/bin/
+/pi
+/piccolo
+.DS_Store
+__pycache__/
+*.py[cod]
 
 # Test binary, built with `go test -c`
 *.test

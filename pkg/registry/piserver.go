@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -19,7 +20,10 @@ import (
 	"github.com/laixintao/piccolo/pkg/sd"
 )
 
-const ONE_G_BPS = 1 * 1024 * 1024 * 1024
+const (
+	oneGiBPerSecond  = 1 * 1024 * 1024 * 1024
+	uploadBurstBytes = 32 * 1024
+)
 
 type PiServer struct {
 	log                     logr.Logger
@@ -47,7 +51,7 @@ func WithMaxUploadConnection(maxConnection int) PiServerOption {
 func WithMaxUploadBlobSpeedBytes(speed float64) PiServerOption {
 	return func(r *PiServer) {
 		r.maxUploadBlobSpeedBytes = speed
-		r.limiter = rate.NewLimiter(rate.Limit(speed), int(speed)) // burst also set to `speed`
+		r.limiter = rate.NewLimiter(rate.Limit(speed), uploadBurstBytes)
 	}
 }
 
@@ -62,7 +66,7 @@ func NewPiServer(ociClient oci.Client, group string, log logr.Logger, sd sd.Serv
 		maxUploadConnections: 5,
 		semaphore:            make(chan struct{}, 5),
 		group:                group,
-		limiter:              rate.NewLimiter(rate.Limit(ONE_G_BPS), int(ONE_G_BPS)),
+		limiter:              rate.NewLimiter(rate.Limit(oneGiBPerSecond), uploadBurstBytes),
 	}
 	for _, opt := range opts {
 		opt(r)
@@ -76,8 +80,10 @@ func (r *PiServer) Server(addr string) (*http.Server, error) {
 		return nil, err
 	}
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: m,
+		Addr:              addr,
+		Handler:           m,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       2 * time.Minute,
 	}
 	return srv, nil
 }
@@ -182,7 +188,11 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 	}
 	b, mediaType, err := r.ociClient.GetManifest(req.Context(), ref.dgst)
 	if err != nil {
-		rw.WriteError(http.StatusNotFound, fmt.Errorf("could not get manifest content for digest %s: %w", ref.dgst.String(), err))
+		status := http.StatusInternalServerError
+		if errors.Is(err, oci.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		rw.WriteError(status, fmt.Errorf("could not get manifest content for digest %s: %w", ref.dgst.String(), err))
 		return
 	}
 	rw.Header().Set("Content-Type", mediaType)
@@ -201,7 +211,11 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref reference) {
 	size, err := r.ociClient.Size(req.Context(), ref.dgst)
 	if err != nil {
-		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("could not determine size of blob with digest %s: %w", ref.dgst.String(), err))
+		status := http.StatusInternalServerError
+		if errors.Is(err, oci.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		rw.WriteError(status, fmt.Errorf("could not determine size of blob with digest %s: %w", ref.dgst.String(), err))
 		return
 	}
 	rw.Header().Set("Accept-Ranges", "bytes")
@@ -214,12 +228,17 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 
 	rc, err := r.ociClient.GetBlob(req.Context(), ref.dgst)
 	if err != nil {
-		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("could not get reader for blob with digest %s: %w", ref.dgst.String(), err))
+		status := http.StatusInternalServerError
+		if errors.Is(err, oci.ErrNotFound) {
+			status = http.StatusNotFound
+		}
+		rw.WriteError(status, fmt.Errorf("could not get reader for blob with digest %s: %w", ref.dgst.String(), err))
 		return
 	}
 	defer rc.Close()
 
 	limitedRC := &ratelimit.RateLimitedReadSeeker{
+		Ctx:     req.Context(),
 		Rs:      rc,
 		Limiter: r.limiter,
 	}
@@ -246,11 +265,11 @@ func getClientIP(req *http.Request) string {
 func (r *PiServer) readyHandler(rw mux.ResponseWriter, req *http.Request) {
 	ok, err := r.sd.Ready(req.Context())
 	if err != nil {
-		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("could not determine router readiness: %w", err))
+		rw.WriteError(http.StatusServiceUnavailable, fmt.Errorf("could not determine router readiness: %w", err))
 		return
 	}
 	if !ok {
-		rw.WriteHeader(http.StatusInternalServerError)
+		rw.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 }

@@ -13,4 +13,8 @@ func TestBufferPool(t *testing.T) {
 	b := bufferPool.Get()
 	require.Len(t, b, 32*1024)
 	bufferPool.Put(b)
+
+	// A caller returning an unexpected slice must not poison the pool.
+	bufferPool.Put(make([]byte, 1))
+	require.Len(t, bufferPool.Get(), size)
 }

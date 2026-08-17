@@ -15,7 +15,6 @@ import hashlib
 import json
 import os
 import random
-import string
 import uuid
 
 ADVERTISE_URL = "http://127.0.0.1:7789/api/v1/distribution/advertise"
@@ -26,6 +25,7 @@ FINDKEY_METHOD = "GET"
 SYNC_METHOD = "POST"
 CONTENT_TYPE = "application/json"
 HOLDER_PORT = 5123
+GROUP = "stresstest"
 
 
 def random_ipv4():
@@ -59,7 +59,8 @@ def make_sync_body(existing_keys=None):
     
     return {
         "keys": keys,
-        "holder": f"{holder_ip}:{HOLDER_PORT}"
+        "holder": f"{holder_ip}:{HOLDER_PORT}",
+        "group": GROUP,
     }
 
 
@@ -70,13 +71,14 @@ def make_advertise_body():
     keys = [random_sha256() for _ in range(num_keys)]
     return {
         "keys": keys,
-        "holder": f"{holder_ip}:{HOLDER_PORT}"
+        "holder": f"{holder_ip}:{HOLDER_PORT}",
+        "group": GROUP,
     }
 
 
 def make_findkey_url(key, count=10):
     """Generate URL for findkey request"""
-    return f"{FINDKEY_URL}?key={key}&count={count}"
+    return f"{FINDKEY_URL}?key={key}&count={count}&group={GROUP}"
 
 
 def ensure_dir(path):
@@ -114,12 +116,10 @@ def generate(outdir, num_advertise_targets):
         tf.write("# generated http-format targets\n")
         tf.write("# Contains mixed advertise, findkey, and sync requests\n\n")
         
-        total_requests = len(all_requests)
-        
         # Batch processing to reduce file I/O
         body_files_to_write = []
         
-        for i, (req_type, req_idx) in enumerate(all_requests):
+        for i, (req_type, _) in enumerate(all_requests):
             if req_type == 'advertise':
                 uid = uuid.uuid4().hex[:8]
                 body_fname = f"advertise-{uid}.json"
