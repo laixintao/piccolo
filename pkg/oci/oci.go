@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 
 	"github.com/containerd/containerd/images"
 	"github.com/opencontainers/go-digest"
@@ -79,6 +80,87 @@ func DetermineMediaType(b []byte) (string, error) {
 		return ocispec.MediaTypeImageManifest, nil
 	}
 	return "", errors.New("not able to determine media type")
+}
+
+// ArchTagKey returns the architecture scoped advertisement key for a tag
+// reference. A bare tag key does not say which architectures the holder
+// actually has content for, which matters for multi arch images.
+func ArchTagKey(tagName, arch string) string {
+	return fmt.Sprintf("%s|%s", tagName, arch)
+}
+
+// ImageArchitectures returns the architectures for which the local content
+// store holds a platform specific manifest of the given image digest.
+func ImageArchitectures(ctx context.Context, client Client, dgst digest.Digest) ([]string, error) {
+	b, mt, err := client.GetManifest(ctx, dgst)
+	if err != nil {
+		return nil, err
+	}
+	switch mt {
+	case images.MediaTypeDockerSchema2ManifestList, ocispec.MediaTypeImageIndex:
+		var idx ocispec.Index
+		if err := json.Unmarshal(b, &idx); err != nil {
+			return nil, err
+		}
+		archSet := map[string]struct{}{}
+		for _, m := range idx.Manifests {
+			// Skip attestation manifests and entries without platform information.
+			if m.Platform == nil || m.Platform.Architecture == "" || m.Platform.Architecture == "unknown" {
+				continue
+			}
+			// Only count architectures whose manifest content exists locally.
+			_, err := client.Size(ctx, m.Digest)
+			if errors.Is(err, ErrNotFound) {
+				continue
+			}
+			if err != nil {
+				return nil, err
+			}
+			archSet[m.Platform.Architecture] = struct{}{}
+		}
+		arches := make([]string, 0, len(archSet))
+		for arch := range archSet {
+			arches = append(arches, arch)
+		}
+		sort.Strings(arches)
+		return arches, nil
+	case images.MediaTypeDockerSchema2Manifest, ocispec.MediaTypeImageManifest:
+		arch, err := ManifestArchitecture(ctx, client, b)
+		if err != nil {
+			return nil, err
+		}
+		if arch == "" {
+			return nil, nil
+		}
+		return []string{arch}, nil
+	default:
+		return nil, fmt.Errorf("unexpected media type %s for digest %s", mt, dgst)
+	}
+}
+
+// ManifestArchitecture reads the config blob referenced by a platform
+// specific image manifest and returns its architecture.
+func ManifestArchitecture(ctx context.Context, client Client, manifestBytes []byte) (string, error) {
+	var manifest ocispec.Manifest
+	if err := json.Unmarshal(manifestBytes, &manifest); err != nil {
+		return "", err
+	}
+	rc, err := client.GetBlob(ctx, manifest.Config.Digest)
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+	b, err := io.ReadAll(rc)
+	if err != nil {
+		return "", err
+	}
+	var config struct {
+		Architecture string `json:"architecture"`
+	}
+	if err := json.Unmarshal(b, &config); err != nil {
+		return "", err
+	}
+	return config.Architecture, nil
 }
 
 func WalkImage(ctx context.Context, client Client, img Image) ([]string, error) {

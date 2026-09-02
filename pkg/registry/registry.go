@@ -10,6 +10,7 @@ import (
 	"net/netip"
 	"net/url"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -20,11 +21,16 @@ import (
 	"github.com/laixintao/piccolo/internal/httputils"
 	"github.com/laixintao/piccolo/internal/mux"
 	"github.com/laixintao/piccolo/pkg/metrics"
+	"github.com/laixintao/piccolo/pkg/oci"
 	"github.com/laixintao/piccolo/pkg/sd"
 )
 
 const (
 	MirroredHeaderKey = "X-Spegel-Mirrored"
+	// ArchHeaderKey carries the architecture of the pulling node so that the
+	// serving peer can refuse to serve a platform specific manifest built for
+	// a different architecture.
+	ArchHeaderKey = "X-Pi-Arch"
 )
 
 type Registry struct {
@@ -35,6 +41,7 @@ type Registry struct {
 	resolveRetries   int
 	resolveTimeout   time.Duration
 	resolveLatestTag bool
+	localArch        string
 	semaphore        chan struct{}
 }
 
@@ -64,6 +71,14 @@ func WithTransport(transport http.RoundTripper) Option {
 	}
 }
 
+// WithLocalArch overrides the architecture of the node, which defaults to
+// the architecture the binary is built for.
+func WithLocalArch(arch string) Option {
+	return func(r *Registry) {
+		r.localArch = arch
+	}
+}
+
 func NewRegistry(sd sd.ServiceDiscover, log logr.Logger, opts ...Option) *Registry {
 	r := &Registry{
 		sd:               sd,
@@ -71,6 +86,7 @@ func NewRegistry(sd sd.ServiceDiscover, log logr.Logger, opts ...Option) *Regist
 		resolveRetries:   3,
 		resolveTimeout:   2 * time.Second,
 		resolveLatestTag: true,
+		localArch:        runtime.GOARCH,
 		bufferPool:       buffer.NewBufferPool(),
 	}
 	for _, opt := range opts {
@@ -163,6 +179,9 @@ func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 	if req.Header.Get(MirroredHeaderKey) != "true" {
 		// Set mirrored header in request to stop infinite loops
 		req.Header.Set(MirroredHeaderKey, "true")
+		// Tell the serving peer which architecture we expect, so it can
+		// refuse to serve a manifest for another architecture.
+		req.Header.Set(ArchHeaderKey, r.localArch)
 		r.handleMirror(rw, req, ref)
 		return "mirror"
 	}
@@ -174,7 +193,10 @@ func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref reference) {
 	key := ref.dgst.String()
 	if key == "" {
-		key = ref.name
+		// Digest keys are content addressed and therefore architecture safe.
+		// Tag keys are not: a peer may hold the tag for another architecture
+		// only, so resolve tags scoped to the local architecture.
+		key = oci.ArchTagKey(ref.name, r.localArch)
 	}
 
 	log := r.log.WithValues("key", key, "path", req.URL.Path, "ip", getClientIP(req))
