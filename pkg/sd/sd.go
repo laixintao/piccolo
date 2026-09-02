@@ -24,7 +24,7 @@ import (
 
 type ServiceDiscover interface {
 	Ready(ctx context.Context) (bool, error)
-	Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error)
+	Resolve(ctx context.Context, key, platform string, count int) ([]netip.AddrPort, error)
 	Advertise(ctx context.Context, keys []string) error
 	Sync(ctx context.Context, keys []string) error
 	DoKeepAlive(ctx context.Context) error
@@ -36,9 +36,10 @@ type PiccoloServiceDiscover struct {
 	httpClient     *http.Client
 	piAddr         string
 	group          string
+	platform       string
 }
 
-func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr string, group string) (*PiccoloServiceDiscover, error) {
+func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr, group, platform string) (*PiccoloServiceDiscover, error) {
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
@@ -60,6 +61,7 @@ func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr s
 		httpClient:     httpClient,
 		piAddr:         piAddr,
 		group:          group,
+		platform:       platform,
 	}, nil
 }
 
@@ -73,9 +75,10 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 	url := p.piccoloAddress
 	url.Path = path.Join(url.Path, "api", "v1", "distribution", "advertise")
 	request := model.ImageAdvertiseRequest{
-		Holder: p.piAddr,
-		Keys:   keys,
-		Group:  p.group,
+		Holder:   p.piAddr,
+		Keys:     keys,
+		Group:    p.group,
+		Platform: p.platform,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -109,8 +112,8 @@ func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) er
 	return nil
 }
 
-func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error) {
-	p.log.Info("Resolve key", "key", key, "count", count)
+func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key, platform string, count int) ([]netip.AddrPort, error) {
+	p.log.Info("Resolve key", "key", key, "platform", platform, "count", count)
 	deadline, _ := ctx.Deadline()
 	fmt.Printf("Enter resolve key The context left %s \n", deadline)
 	log := logr.FromContextOrDiscard(ctx)
@@ -121,6 +124,9 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	params.Add("key", key)
 	params.Add("count", strconv.Itoa(count))
 	params.Add("request_host", strings.Split(p.piAddr, ":")[0])
+	if platform != "" {
+		params.Add("platform", platform)
+	}
 	u.RawQuery = params.Encode()
 
 	resolveTimer := prometheus.NewTimer(metrics.ResolveDurHistogram.WithLabelValues())
@@ -166,9 +172,10 @@ func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
 	url := p.piccoloAddress
 	url.Path = path.Join(url.Path, "api", "v1", "distribution", "sync")
 	request := model.ImageAdvertiseRequest{
-		Holder: p.piAddr,
-		Keys:   keys,
-		Group:  p.group,
+		Holder:   p.piAddr,
+		Keys:     keys,
+		Group:    p.group,
+		Platform: p.platform,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {
@@ -208,7 +215,7 @@ func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
 	url.Path = path.Join(url.Path, "api", "v1", "keepalive")
 	request := model.KeepAliveRequest{
 		HostAddr: p.piAddr,
-		Group: p.group,
+		Group:    p.group,
 	}
 	body, err := json.Marshal(request)
 	if err != nil {

@@ -13,6 +13,7 @@ import (
 	"github.com/laixintao/piccolo/pkg/distributionapi/metrics"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/distributionapi/storage"
+	"github.com/laixintao/piccolo/pkg/oci"
 )
 
 type DistributionHandler struct {
@@ -47,6 +48,12 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		})
 		return
 	}
+	platform, err := normalizeOptionalPlatform(req.Platform)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{Success: false, Message: err.Error()})
+		return
+	}
+	req.Platform = platform
 
 	distributions := make([]*model.Distribution, 0, len(req.Keys))
 	for _, key := range req.Keys {
@@ -54,9 +61,10 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 			continue
 		}
 		distributions = append(distributions, &model.Distribution{
-			Key:    key,
-			Holder: req.Holder,
-			Group:  req.Group,
+			Key:      key,
+			Holder:   req.Holder,
+			Group:    req.Group,
+			Platform: req.Platform,
 		})
 	}
 
@@ -105,8 +113,14 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		})
 		return
 	}
+	platform, err := normalizeOptionalPlatform(req.Platform)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+	req.Platform = platform
 
-	holders, err := h.m.Distribution.GetHolderByKey(ctx, req.Group, req.Key)
+	holders, err := h.m.Distribution.GetHolderByKey(ctx, req.Group, req.Key, req.Platform)
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key", "key", req.Key)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -139,7 +153,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		}
 	}
 
-	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "queryed_from_db", len(holders), "sort_cost_seconds", sortDuration)
+	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "platform", req.Platform, "queryed_from_db", len(holders), "sort_cost_seconds", sortDuration)
 
 	// Get limited holders if count is specified
 	limit := 100
@@ -151,9 +165,10 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, model.FindKeyResponse{
-		Key:     req.Key,
-		Holders: sorted[:limit],
-		Group:   req.Group,
+		Key:      req.Key,
+		Holders:  sorted[:limit],
+		Group:    req.Group,
+		Platform: req.Platform,
 	})
 }
 
@@ -178,6 +193,12 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		})
 		return
 	}
+	platform, err := normalizeOptionalPlatform(req.Platform)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, model.ImageAdvertiseResponse{Success: false, Message: err.Error()})
+		return
+	}
+	req.Platform = platform
 
 	existingKeys, err := h.m.Distribution.GetKeysByHolder(req.Group, req.Holder)
 	if err != nil {
@@ -185,6 +206,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 			Success: false,
 			Message: "Error when delete keys from DB",
 		})
+		return
 	}
 
 	currentKeys := req.Keys
@@ -208,9 +230,10 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 				continue
 			}
 			distributions = append(distributions, &model.Distribution{
-				Key:    key,
-				Holder: req.Holder,
-				Group:  req.Group,
+				Key:      key,
+				Holder:   req.Holder,
+				Group:    req.Group,
+				Platform: req.Platform,
 			})
 		}
 
@@ -224,6 +247,15 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		}
 	}
 
+	if err := h.m.Distribution.UpdatePlatformByHolder(req.Holder, req.Group, req.Platform); err != nil {
+		h.log.Error(err, "failed to update holder platform", "holder", req.Holder, "platform", req.Platform)
+		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
+			Success: false,
+			Message: "Error when updating holder platform: " + err.Error(),
+		})
+		return
+	}
+
 	duration := time.Since(start).Seconds()
 	h.log.Info("distributions created successfully",
 		"holder", req.Holder,
@@ -235,6 +267,17 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 		Success: true,
 		Message: "Distribution created!",
 	})
+}
+
+func normalizeOptionalPlatform(value string) (string, error) {
+	if value == "" {
+		return "", nil
+	}
+	platform, err := oci.ParsePlatform(value)
+	if err != nil {
+		return "", err
+	}
+	return oci.FormatPlatform(platform), nil
 }
 
 func diffSets(a, b []string) (onlyA, onlyB []string) {

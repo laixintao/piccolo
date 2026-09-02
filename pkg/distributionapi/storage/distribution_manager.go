@@ -27,7 +27,14 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 
 	start := time.Now()
 	err := m.db.Clauses(
-		clause.Insert{Modifier: "IGNORE"},
+		clause.OnConflict{
+			Columns: []clause.Column{
+				{Name: "group"},
+				{Name: "key"},
+				{Name: "holder"},
+			},
+			DoUpdates: clause.AssignmentColumns([]string{"platform", "updated_at"}),
+		},
 		dbresolver.Use(group),
 		dbresolver.Write,
 	).CreateInBatches(distributions, MaxBatch).Error
@@ -41,7 +48,7 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	return err
 }
 
-func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, key string) ([]string, error) {
+func (m *DistributionManager) GetHolderByKey(ctx context.Context, group, key, platform string) ([]string, error) {
 	start := time.Now()
 	var retErr error
 	defer func() {
@@ -59,6 +66,9 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, 
 		Model(&model.Distribution{}).
 		Where("`group` = ? AND `key` = ?", group, key).
 		Limit(FindKeyMaxResults)
+	if platform != "" {
+		query = query.Where("`platform` = ?", platform)
+	}
 
 	if err := query.Pluck("holder", &holders).Error; err != nil {
 		retErr = fmt.Errorf("failed to get holders by key %s: %w", key, err)
@@ -66,6 +76,23 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, 
 	}
 
 	return holders, nil
+}
+
+func (m *DistributionManager) UpdatePlatformByHolder(holder, group, platform string) error {
+	start := time.Now()
+	err := m.db.
+		Clauses(dbresolver.Use(group), dbresolver.Write).
+		Model(&model.Distribution{}).
+		Where("`group` = ? AND `holder` = ? AND (`platform` <> ? OR `platform` IS NULL)", group, holder, platform).
+		Update("platform", platform).Error
+
+	status := "success"
+	if err != nil {
+		status = "fail"
+	}
+	metrics.DBQueryTotal.WithLabelValues("distribution_tab", "update_platform_by_holder", group, status).Inc()
+	metrics.DBQueryDuration.WithLabelValues("distribution_tab", "update_platform_by_holder", group, status).Observe(time.Since(start).Seconds())
+	return err
 }
 
 func (m *DistributionManager) GetKeysByHolder(group, holder string) ([]string, error) {

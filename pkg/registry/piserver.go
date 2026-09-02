@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	containerdplatforms "github.com/containerd/platforms"
 	"github.com/go-logr/logr"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/time/rate"
 
 	"github.com/laixintao/piccolo/internal/mux"
@@ -27,6 +29,7 @@ type PiServer struct {
 	resolveRetries          int
 	resolveTimeout          time.Duration
 	resolveLatestTag        bool
+	platform                ocispec.Platform
 	maxUploadConnections    int
 	semaphore               chan struct{}
 	sd                      sd.ServiceDiscover
@@ -51,6 +54,12 @@ func WithMaxUploadBlobSpeedBytes(speed float64) PiServerOption {
 	}
 }
 
+func WithPiPlatform(platform ocispec.Platform) PiServerOption {
+	return func(r *PiServer) {
+		r.platform = containerdplatforms.Normalize(platform)
+	}
+}
+
 func NewPiServer(ociClient oci.Client, group string, log logr.Logger, sd sd.ServiceDiscover, opts ...PiServerOption) *PiServer {
 	r := &PiServer{
 		ociClient:            ociClient,
@@ -59,6 +68,7 @@ func NewPiServer(ociClient oci.Client, group string, log logr.Logger, sd sd.Serv
 		resolveRetries:       3,
 		resolveTimeout:       20 * time.Millisecond,
 		resolveLatestTag:     true,
+		platform:             containerdplatforms.Normalize(containerdplatforms.DefaultSpec()),
 		maxUploadConnections: 5,
 		semaphore:            make(chan struct{}, 5),
 		group:                group,
@@ -172,6 +182,8 @@ func (r *PiServer) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 }
 
 func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref reference) {
+	var b []byte
+	var mediaType string
 	if ref.dgst == "" {
 		var err error
 		ref.dgst, err = r.ociClient.Resolve(req.Context(), ref.name)
@@ -179,11 +191,43 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 			rw.WriteError(http.StatusNotFound, fmt.Errorf("could not get digest for image tag %s: %w", ref.name, err))
 			return
 		}
+
+		if requestedPlatform := req.Header.Get(PlatformHeaderKey); requestedPlatform != "" {
+			platform, err := oci.ParsePlatform(requestedPlatform)
+			if err != nil {
+				rw.WriteError(http.StatusNotFound, fmt.Errorf("invalid requested platform %q: %w", requestedPlatform, err))
+				return
+			}
+			if !containerdplatforms.OnlyStrict(r.platform).Match(platform) {
+				rw.WriteError(http.StatusNotFound, fmt.Errorf(
+					"peer platform %s does not match requested platform %s",
+					oci.FormatPlatform(r.platform),
+					oci.FormatPlatform(platform),
+				))
+				return
+			}
+			selected, err := oci.ManifestForPlatform(req.Context(), r.ociClient, ref.dgst, platform)
+			if err != nil {
+				rw.WriteError(http.StatusNotFound, fmt.Errorf(
+					"could not get manifest for platform %s and tag %s: %w",
+					oci.FormatPlatform(platform),
+					ref.name,
+					err,
+				))
+				return
+			}
+			ref.dgst = selected.Digest
+			b = selected.Content
+			mediaType = selected.MediaType
+		}
 	}
-	b, mediaType, err := r.ociClient.GetManifest(req.Context(), ref.dgst)
-	if err != nil {
-		rw.WriteError(http.StatusNotFound, fmt.Errorf("could not get manifest content for digest %s: %w", ref.dgst.String(), err))
-		return
+	if b == nil {
+		var err error
+		b, mediaType, err = r.ociClient.GetManifest(req.Context(), ref.dgst)
+		if err != nil {
+			rw.WriteError(http.StatusNotFound, fmt.Errorf("could not get manifest content for digest %s: %w", ref.dgst.String(), err))
+			return
+		}
 	}
 	rw.Header().Set("Content-Type", mediaType)
 	rw.Header().Set("Content-Length", strconv.FormatInt(int64(len(b)), 10))
@@ -191,7 +235,7 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 	if req.Method == http.MethodHead {
 		return
 	}
-	_, err = rw.Write(b)
+	_, err := rw.Write(b)
 	if err != nil {
 		r.log.Error(err, "error occurred when writing manifest")
 		return

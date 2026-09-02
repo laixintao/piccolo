@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/laixintao/piccolo/internal/randduration"
 	"github.com/laixintao/piccolo/pkg/metrics"
@@ -22,20 +23,21 @@ const (
 
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 	fullRefreshMinutes int64,
-	resolveLatestTag bool) error {
+	resolveLatestTag bool,
+	platform ocispec.Platform) error {
 	log := logr.FromContextOrDiscard(ctx)
 
 	log.Info("Start periodic updates channel.", "durationMinutes", fullRefreshMinutes)
 
 	fullUpdatesCh := make(chan string, 10)
-	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
+	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag, platform)
 
 	// random delay avoid all same Pi updates at the same time
 	go startIntervalSync(ctx, fullRefreshMinutes, fullUpdatesCh)
 	go startKeepAlive(ctx, sd)
 
 	for {
-		ociCtx, calcenOciClient := context.WithCancel(ctx)
+		ociCtx, cancelOciClient := context.WithCancel(ctx)
 		eventCh, errCh, cErrCh, err := ociClient.Subscribe(ociCtx)
 
 		metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
@@ -49,6 +51,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 			for {
 				select {
 				case <-ctx.Done():
+					cancelOciClient()
 					return nil
 
 				case event, ok := <-eventCh:
@@ -65,7 +68,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 						continue
 					}
 
-					if _, err := update(ctx, ociClient, sd, event, false, resolveLatestTag); err != nil {
+					if _, err := update(ctx, ociClient, sd, event, false, resolveLatestTag, platform); err != nil {
 						log.Error(err, "received error when updating image")
 						continue
 					}
@@ -89,7 +92,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 			} // subscribe for
 		}
 
-		calcenOciClient()
+		cancelOciClient()
 		log.Info("the subscriber need to be restarted, but I'll wait 3 seconds...")
 
 		select {
@@ -105,7 +108,8 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 
 // if full updates triggered (less than) MAX_DELETION_EVENTS in FULLUPDATE_WAITTIME
 // the full update will only be called once.
-func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) {
+func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
+	resolveLatestTag bool, platform ocispec.Platform) {
 	var buffer []string
 	log := logr.FromContextOrDiscard(ctx)
 	timer := time.NewTimer(FULLUPDATE_WAITTIME)
@@ -113,7 +117,7 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 
 	flush := func() {
 		if len(buffer) > 0 {
-			all(ctx, ociClient, sd, resolveLatestTag)
+			all(ctx, ociClient, sd, resolveLatestTag, platform)
 			buffer = nil
 			timer.Stop()
 		}
@@ -137,7 +141,8 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 	}
 }
 
-func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) error {
+func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
+	resolveLatestTag bool, platform ocispec.Platform) error {
 	log := logr.FromContextOrDiscard(ctx).V(4)
 	imgs, err := ociClient.ListImages(ctx)
 	log.Info("Exeucte a full updates, list images: ", "imgs", imgs)
@@ -158,8 +163,10 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 
 		if !(!resolveLatestTag && img.IsLatestTag()) {
 			if tagName, ok := img.TagName(); ok {
-				keys[tagName] = img.Registry
-				metrics.AdvertisedImageDigests.WithLabelValues(img.Registry).Add(1)
+				if imageAvailableForPlatform(ctx, ociClient, img, platform) {
+					keys[tagName] = img.Registry
+					metrics.AdvertisedImageTags.WithLabelValues(img.Registry).Add(1)
+				}
 			}
 		}
 
@@ -188,11 +195,16 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 	return errors.Join(errs...)
 }
 
-func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, event oci.ImageEvent, skipDigests, resolveLatestTag bool) (int, error) {
+func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, event oci.ImageEvent,
+	skipDigests, resolveLatestTag bool, platform ocispec.Platform) (int, error) {
 	keys := []string{}
+	tagAdvertised := false
 	if !(!resolveLatestTag && event.Image.IsLatestTag()) {
 		if tagName, ok := event.Image.TagName(); ok {
-			keys = append(keys, tagName)
+			if imageAvailableForPlatform(ctx, ociClient, event.Image, platform) {
+				keys = append(keys, tagName)
+				tagAdvertised = true
+			}
 		}
 	}
 	if event.Type == oci.DeleteEvent {
@@ -215,13 +227,27 @@ func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ev
 		// We don't know how many unique digest keys will be associated with the new image;
 		// that can only be updated by the full image list sync in all().
 		metrics.AdvertisedImages.WithLabelValues(event.Image.Registry).Add(1)
-		if event.Image.Tag == "" {
-			metrics.AdvertisedImageDigests.WithLabelValues(event.Image.Registry).Add(1)
-		} else {
+		if tagAdvertised {
 			metrics.AdvertisedImageTags.WithLabelValues(event.Image.Registry).Add(1)
+		} else if event.Image.Tag == "" {
+			metrics.AdvertisedImageDigests.WithLabelValues(event.Image.Registry).Add(1)
 		}
 	}
 	return len(keys), nil
+}
+
+func imageAvailableForPlatform(ctx context.Context, ociClient oci.Client, img oci.Image,
+	platform ocispec.Platform) bool {
+	_, err := oci.ManifestForPlatform(ctx, ociClient, img.Digest, platform)
+	if err == nil {
+		return true
+	}
+
+	logr.FromContextOrDiscard(ctx).Info("image tag is not available for this platform",
+		"image", img.String(),
+		"platform", oci.FormatPlatform(platform),
+		"error", err.Error())
+	return false
 }
 
 func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh chan<- string) {

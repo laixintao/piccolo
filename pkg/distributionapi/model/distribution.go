@@ -6,9 +6,10 @@ import (
 
 type Distribution struct {
 	ID        uint      `gorm:"primaryKey;autoIncrement" json:"id"`
-	Key       string    `gorm:"size:255;uniqueIndex:uniq_idx_group_key_holder_uniq,priority:2" json:"key"`
+	Key       string    `gorm:"size:255;uniqueIndex:uniq_idx_group_key_holder_uniq,priority:2;index:idx_group_key_platform,priority:2" json:"key"`
 	Holder    string    `gorm:"size:24;uniqueIndex:uniq_idx_group_key_holder_uniq,priority:3;index:idx_holder" json:"holder"`
-	Group     string    `gorm:"size:64;uniqueIndex:uniq_idx_group_key_holder_uniq,priority:1" json:"group"`
+	Group     string    `gorm:"size:64;uniqueIndex:uniq_idx_group_key_holder_uniq,priority:1;index:idx_group_key_platform,priority:1" json:"group"`
+	Platform  string    `gorm:"size:32;not null;default:'';index:idx_group_key_platform,priority:3" json:"platform"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -31,9 +32,10 @@ func (Host) TableName() string {
 }
 
 type ImageAdvertiseRequest struct {
-	Holder string   `json:"holder" binding:"required"`
-	Keys   []string `json:"keys" binding:"required"`
-	Group  string   `json:"group" binding:"required"`
+	Holder   string   `json:"holder" binding:"required"`
+	Keys     []string `json:"keys" binding:"required"`
+	Group    string   `json:"group" binding:"required"`
+	Platform string   `json:"platform,omitempty"`
 }
 
 type ImageAdvertiseResponse struct {
@@ -49,15 +51,17 @@ type KeepAliveResponse struct {
 type FindKeyRequest struct {
 	Key         string `form:"key" binding:"required"`
 	Group       string `form:"group" binding:"required"`
+	Platform    string `form:"platform"`
 	Count       int    `form:"count"`
 	RequestHost string `form:"request_host"`
 }
 
 type FindKeyResponse struct {
-	Key     string   `json:"key"`
-	Group   string   `form:"group" binding:"required"`
-	Holders []string `json:"holders"`
-	Total   int      `json:"total"`
+	Key      string   `json:"key"`
+	Group    string   `json:"group"`
+	Platform string   `json:"platform,omitempty"`
+	Holders  []string `json:"holders"`
+	Total    int      `json:"total"`
 }
 
 type KeepAliveRequest struct {

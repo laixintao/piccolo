@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	containerdplatforms "github.com/containerd/platforms"
 	"github.com/go-logr/logr"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 
 	"github.com/laixintao/piccolo/internal/buffer"
 	"github.com/laixintao/piccolo/internal/httputils"
@@ -25,6 +27,7 @@ import (
 
 const (
 	MirroredHeaderKey = "X-Spegel-Mirrored"
+	PlatformHeaderKey = "X-Piccolo-Platform"
 )
 
 type Registry struct {
@@ -35,6 +38,7 @@ type Registry struct {
 	resolveRetries   int
 	resolveTimeout   time.Duration
 	resolveLatestTag bool
+	platform         ocispec.Platform
 	semaphore        chan struct{}
 }
 
@@ -64,6 +68,12 @@ func WithTransport(transport http.RoundTripper) Option {
 	}
 }
 
+func WithPlatform(platform ocispec.Platform) Option {
+	return func(r *Registry) {
+		r.platform = containerdplatforms.Normalize(platform)
+	}
+}
+
 func NewRegistry(sd sd.ServiceDiscover, log logr.Logger, opts ...Option) *Registry {
 	r := &Registry{
 		sd:               sd,
@@ -71,6 +81,7 @@ func NewRegistry(sd sd.ServiceDiscover, log logr.Logger, opts ...Option) *Regist
 		resolveRetries:   3,
 		resolveTimeout:   2 * time.Second,
 		resolveLatestTag: true,
+		platform:         containerdplatforms.Normalize(containerdplatforms.DefaultSpec()),
 		bufferPool:       buffer.NewBufferPool(),
 	}
 	for _, opt := range opts {
@@ -173,11 +184,16 @@ func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 
 func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref reference) {
 	key := ref.dgst.String()
+	platform := ""
 	if key == "" {
 		key = ref.name
+		platform = containerdplatforms.Format(r.platform)
+		req.Header.Set(PlatformHeaderKey, platform)
+	} else {
+		req.Header.Del(PlatformHeaderKey)
 	}
 
-	log := r.log.WithValues("key", key, "path", req.URL.Path, "ip", getClientIP(req))
+	log := r.log.WithValues("key", key, "platform", platform, "path", req.URL.Path, "ip", getClientIP(req))
 
 	defer func() {
 		cacheType := "hit"
@@ -197,7 +213,7 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 	resolveCtx, cancel := context.WithTimeout(req.Context(), r.resolveTimeout)
 	defer cancel()
 	resolveCtx = logr.NewContext(resolveCtx, log)
-	peers, err := r.sd.Resolve(resolveCtx, key, r.resolveRetries)
+	peers, err := r.sd.Resolve(resolveCtx, key, platform, r.resolveRetries)
 
 	if err != nil {
 		if errors.Is(err, httputils.ErrNotFound) {
@@ -245,20 +261,19 @@ func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Req
 	proxy := httputil.NewSingleHostReverseProxy(u)
 	proxy.BufferPool = r.bufferPool
 	proxy.Transport = r.transport
-	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, err error) {
+	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
 		r.log.Error(err, "request to mirror failed")
-		http.Error(rw, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("expected mirror to respond with 200 OK but received: %s", resp.Status)
+		if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+			return fmt.Errorf("expected mirror to respond with a 2xx status but received: %s", resp.Status)
 		}
 		succeeded = true
 		return nil
 	}
 	proxy.ServeHTTP(rw, req)
 	if !succeeded {
-		return errors.New("Fail to mirror request")
+		return errors.New("failed to mirror request")
 	}
 	return nil
 }

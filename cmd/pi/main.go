@@ -19,6 +19,7 @@ import (
 	"github.com/laixintao/piccolo/pkg/registry"
 	"github.com/laixintao/piccolo/pkg/sd"
 	"github.com/laixintao/piccolo/pkg/state"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"golang.org/x/sync/errgroup"
@@ -48,6 +49,7 @@ type Arguments struct {
 	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"2s" help:"Max duration spent finding a mirror."`
 	MirrorResolveRetries        int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
 	Group                       string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
+	Platform                    string        `arg:"--platform,env:PI_PLATFORM" help:"Native OCI platform served by this Pi, for example linux/arm64 or linux/amd64. Defaults to the runtime platform."`
 	Version                     bool          `arg:"-v,--version" help:"show version"`
 }
 
@@ -72,6 +74,14 @@ func main() {
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init")
 	ctx := logr.NewContext(context.Background(), log)
+	platform, err := oci.ParsePlatform(args.Platform)
+	if err != nil {
+		log.Error(err, "invalid Pi platform", "platform", args.Platform)
+		os.Exit(1)
+	}
+	platformName := oci.FormatPlatform(platform)
+	log.Info("Pi platform configured", "platform", platformName)
+
 	ociClient, err := oci.NewContainerd(ctx, args.ContainerdSock, args.ContainerdNamespace, args.Registries, oci.WithContentPath(args.ContainerdContentPath))
 	if err != nil {
 		log.Error(err, "run exit with error")
@@ -79,7 +89,7 @@ func main() {
 	}
 	log.Info("containerd sdk init")
 
-	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group)
+	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group, platformName)
 	if err != nil {
 		log.Error(err, "NewPiccoloServiceDiscover error")
 		os.Exit(1)
@@ -95,7 +105,7 @@ func main() {
 	log.Info("Metrics server started", "address", args.PiAddr)
 
 	// Pi Server
-	err = startPiServer(ctx, args.Group, args.MaxUploadConnections, args.MaxUploadBlobBytesPerSecond, ociClient, piccoloSD, log, args.PiAddr, g)
+	err = startPiServer(ctx, args.Group, platform, args.MaxUploadConnections, args.MaxUploadBlobBytesPerSecond, ociClient, piccoloSD, log, args.PiAddr, g)
 	if err != nil {
 		log.Error(err, "Error when start Pi Server")
 		os.Exit(1)
@@ -107,6 +117,7 @@ func main() {
 		registry.WithResolveLatestTag(args.ResolveLatestTag),
 		registry.WithResolveRetries(args.MirrorResolveRetries),
 		registry.WithResolveTimeout(args.MirrorResolveTimeout),
+		registry.WithPlatform(platform),
 	}
 	err = startRegistryServer(ctx, ociClient, piccoloSD, log, args.RegistryAddr, g, registryOpts...)
 	if err != nil {
@@ -117,7 +128,7 @@ func main() {
 
 	// State tracking
 	g.Go(func() error {
-		return state.Track(ctx, ociClient, piccoloSD, args.FullRefreshMinutes, args.ResolveLatestTag)
+		return state.Track(ctx, ociClient, piccoloSD, args.FullRefreshMinutes, args.ResolveLatestTag, platform)
 	})
 
 	err = g.Wait()
@@ -127,12 +138,13 @@ func main() {
 	}
 }
 
-func startPiServer(ctx context.Context, group string, maxConnection int,
+func startPiServer(ctx context.Context, group string, platform ocispec.Platform, maxConnection int,
 	maxUploadBlobSpeedBytes float64,
 	ociClient oci.Client, sd sd.ServiceDiscover, log logr.Logger, piAddr string, g *errgroup.Group) error {
 	piServerOptions := []registry.PiServerOption{
 		registry.WithMaxUploadConnection(maxConnection),
 		registry.WithMaxUploadBlobSpeedBytes(maxUploadBlobSpeedBytes),
+		registry.WithPiPlatform(platform),
 	}
 	reg := registry.NewPiServer(ociClient, group, log, sd, piServerOptions...)
 	regSrv, err := reg.Server(piAddr)
