@@ -67,7 +67,7 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group, key, pl
 		Where("`group` = ? AND `key` = ?", group, key).
 		Limit(FindKeyMaxResults)
 	if platform != "" {
-		query = query.Where("`platform` = ?", platform)
+		query = query.Where("`platform` = ? OR `platform` = ''", platform)
 	}
 
 	if err := query.Pluck("holder", &holders).Error; err != nil {
