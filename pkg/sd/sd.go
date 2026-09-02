@@ -21,6 +21,8 @@ import (
 )
 
 type ServiceDiscover interface {
+	// Ready is retained for API compatibility. Pi's /healthz handler does not
+	// call service discovery and is always evaluated locally.
 	Ready(ctx context.Context) (bool, error)
 	Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error)
 	Advertise(ctx context.Context, keys []string) error
@@ -75,24 +77,8 @@ func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr s
 	}, nil
 }
 
-func (p PiccoloServiceDiscover) Ready(ctx context.Context) (bool, error) {
-	u := p.piccoloAddress
-	u.Path = path.Join(u.Path, "healthz")
-	resp, err := httputils.DoRequestWithRetry(
-		ctx,
-		http.MethodGet,
-		u.String(),
-		nil,
-		map[string]string{"Accept": "application/json"},
-		time.Second,
-		time.Second,
-		p.httpClient,
-	)
-	if err != nil {
-		return false, err
-	}
-	defer resp.Body.Close()
-	return resp.StatusCode == http.StatusOK, nil
+func (p PiccoloServiceDiscover) Ready(context.Context) (bool, error) {
+	return true, nil
 }
 
 func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) error {

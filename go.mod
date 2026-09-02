@@ -3,7 +3,6 @@ module github.com/laixintao/piccolo
 go 1.24.1
 
 require (
-	github.com/Masterminds/semver/v3 v3.4.0
 	github.com/alexflint/go-arg v1.6.0
 	github.com/containerd/containerd v1.7.28
 	github.com/containerd/containerd/api v1.9.0
@@ -21,7 +20,6 @@ require (
 	gorm.io/driver/mysql v1.6.0
 	gorm.io/gorm v1.31.0
 	gorm.io/plugin/dbresolver v1.6.2
-	k8s.io/cri-api v0.34.1
 )
 
 require (
@@ -65,6 +63,7 @@ require (
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
 	github.com/klauspost/cpuid/v2 v2.3.0 // indirect
+	github.com/kylelemons/godebug v1.1.0 // indirect
 	github.com/leodido/go-urn v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect
 	github.com/moby/locker v1.0.1 // indirect

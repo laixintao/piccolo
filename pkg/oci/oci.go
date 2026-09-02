@@ -21,7 +21,7 @@ type Client interface {
 	// Name returns the name of the Client implementation.
 	Name() string
 
-	// Verify checks that all expected configuration is set.
+	// Verify checks that the backing service is reachable.
 	Verify(ctx context.Context) error
 
 	// Subscribe will notify for any image events ocuring in the store backend.

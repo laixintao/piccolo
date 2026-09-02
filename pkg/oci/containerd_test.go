@@ -2,8 +2,10 @@ package oci
 
 import (
 	"context"
+	"errors"
 	"net/url"
 	"testing"
+	"time"
 
 	eventtypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/typeurl/v2"
@@ -41,6 +43,33 @@ func TestNewContainerdRejectsInvalidRegistry(t *testing.T) {
 		mustURLs(t, "ftp://docker.io"),
 	)
 	require.EqualError(t, err, "invalid registry url scheme must be http or https: ftp://docker.io")
+}
+
+func TestVerifyServingUsesBoundedContext(t *testing.T) {
+	t.Parallel()
+
+	before := time.Now()
+	err := verifyServing(context.Background(), func(ctx context.Context) (bool, error) {
+		deadline, ok := ctx.Deadline()
+		require.True(t, ok)
+		require.WithinDuration(t, before.Add(containerdVerifyTimeout), deadline, time.Second)
+		return true, nil
+	})
+	require.NoError(t, err)
+}
+
+func TestVerifyServingReportsUnavailableContainerd(t *testing.T) {
+	t.Parallel()
+
+	require.EqualError(t, verifyServing(context.Background(), func(context.Context) (bool, error) {
+		return false, nil
+	}), "could not reach Containerd service")
+
+	sentinel := errors.New("connection failed")
+	err := verifyServing(context.Background(), func(context.Context) (bool, error) {
+		return false, sentinel
+	})
+	require.ErrorIs(t, err, sentinel)
 }
 
 func TestCreateFilters(t *testing.T) {

@@ -262,14 +262,6 @@ func getClientIP(req *http.Request) string {
 	return h
 }
 
-func (r *PiServer) readyHandler(rw mux.ResponseWriter, req *http.Request) {
-	ok, err := r.sd.Ready(req.Context())
-	if err != nil {
-		rw.WriteError(http.StatusServiceUnavailable, fmt.Errorf("could not determine router readiness: %w", err))
-		return
-	}
-	if !ok {
-		rw.WriteHeader(http.StatusServiceUnavailable)
-		return
-	}
+func (r *PiServer) readyHandler(rw mux.ResponseWriter, _ *http.Request) {
+	rw.WriteHeader(http.StatusOK)
 }

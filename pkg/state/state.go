@@ -15,9 +15,10 @@ import (
 )
 
 const (
-	FULLUPDATE_WAITTIME = 60 * time.Second
-	HEART_BEAT_INTERVAL = 10 * time.Minute
-	MAX_DELETION_EVENTS = 100
+	FULLUPDATE_WAITTIME  = 60 * time.Second
+	HEART_BEAT_INTERVAL  = 10 * time.Minute
+	MAX_DELETION_EVENTS  = 100
+	startupSyncMaxJitter = 60 * time.Second
 )
 
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
@@ -29,12 +30,11 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 
 	fullUpdatesCh := make(chan string, 10)
 	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
-	// Reconcile images that existed before the event subscription started.
-	fullUpdatesCh <- "startup"
 
 	// random delay avoid all same Pi updates at the same time
 	go startIntervalSync(ctx, fullRefreshMinutes, fullUpdatesCh)
 	go startKeepAlive(ctx, sd)
+	startupSyncScheduled := false
 
 	for {
 		ociCtx, cancelOCIClient := context.WithCancel(ctx)
@@ -46,6 +46,10 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 		} else {
 			metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
 			log.Info("Subscribed from containerd")
+			if !startupSyncScheduled {
+				startupSyncScheduled = true
+				go startStartupSync(ctx, ociClient, sd, resolveLatestTag, startupSyncMaxJitter)
+			}
 
 		SubscribeLoop:
 			for {
@@ -106,6 +110,24 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 	}
 }
 
+func startStartupSync(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool, maxJitter time.Duration) {
+	log := logr.FromContextOrDiscard(ctx)
+	delay := randduration.RandomDuration(maxJitter)
+	log.Info("Initial image-state sync scheduled", "delay", delay)
+
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+	case <-ctx.Done():
+		return
+	}
+
+	if err := all(ctx, ociClient, sd, resolveLatestTag); err != nil {
+		log.Error(err, "initial image-state sync failed")
+	}
+}
+
 // if full updates triggered (less than) MAX_DELETION_EVENTS in FULLUPDATE_WAITTIME
 // the full update will only be called once.
 func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) {
@@ -163,11 +185,13 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 	for _, img := range imgs {
 		_, skipDigests := targets[img.Digest.String()]
 
-		if !(!resolveLatestTag && img.IsLatestTag()) {
-			if tagName, ok := img.TagName(); ok {
+		if tagName, isTag := img.TagName(); isTag {
+			if !(!resolveLatestTag && img.IsLatestTag()) {
 				keys[tagName] = img.Registry
 				metrics.AdvertisedImageTags.WithLabelValues(img.Registry).Add(1)
 			}
+		} else {
+			metrics.AdvertisedImageDigests.WithLabelValues(img.Registry).Add(1)
 		}
 
 		if !skipDigests {

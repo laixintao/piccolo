@@ -10,8 +10,8 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
-	semver "github.com/Masterminds/semver/v3"
 	"github.com/containerd/containerd"
 	eventtypes "github.com/containerd/containerd/api/events"
 	"github.com/containerd/containerd/content"
@@ -20,8 +20,9 @@ import (
 	"github.com/go-logr/logr"
 	"github.com/opencontainers/go-digest"
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
-	runtimeapi "k8s.io/cri-api/pkg/apis/runtime/v1"
 )
+
+const containerdVerifyTimeout = 10 * time.Second
 
 var _ Client = &Containerd{}
 
@@ -82,36 +83,24 @@ func (c *Containerd) Name() string {
 }
 
 func (c *Containerd) Verify(ctx context.Context) error {
-	log := logr.FromContextOrDiscard(ctx)
 	client, err := c.Client()
 	if err != nil {
 		return err
 	}
-	ok, err := client.IsServing(ctx)
+	return verifyServing(ctx, client.IsServing)
+}
+
+func verifyServing(ctx context.Context, isServing func(context.Context) (bool, error)) error {
+	verifyCtx, cancel := context.WithTimeout(ctx, containerdVerifyTimeout)
+	defer cancel()
+
+	ok, err := isServing(verifyCtx)
 	if err != nil {
-		return err
+		return fmt.Errorf("check containerd availability: %w", err)
 	}
 	if !ok {
 		return errors.New("could not reach Containerd service")
 	}
-	srv := runtimeapi.NewRuntimeServiceClient(client.Conn())
-
-	versionResp, err := srv.Version(ctx, &runtimeapi.VersionRequest{})
-	if err != nil {
-		return err
-	}
-	version, err := semver.NewVersion(versionResp.GetRuntimeVersion())
-	if err != nil {
-		return err
-	}
-	constraint, err := semver.NewConstraint(">= 1.0.0")
-	if err != nil {
-		return err
-	}
-	if !constraint.Check(version) {
-		return fmt.Errorf("unsupported containerd runtime version %s", version)
-	}
-	log.Info("containerd connection verified", "runtime_version", version.String())
 	return nil
 }
 
