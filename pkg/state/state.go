@@ -159,6 +159,16 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 		if !(!resolveLatestTag && img.IsLatestTag()) {
 			if tagName, ok := img.TagName(); ok {
 				keys[tagName] = img.Registry
+				// Advertise the tag scoped by the architectures we actually
+				// hold content for, so that a puller on a different
+				// architecture is never routed to this node for the tag.
+				arches, err := oci.ImageArchitectures(ctx, ociClient, img.Digest)
+				if err != nil {
+					log.Error(err, "could not determine architectures for image", "image", img.String())
+				}
+				for _, arch := range arches {
+					keys[oci.ArchTagKey(tagName, arch)] = img.Registry
+				}
 				metrics.AdvertisedImageDigests.WithLabelValues(img.Registry).Add(1)
 			}
 		}
@@ -189,14 +199,21 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 }
 
 func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, event oci.ImageEvent, skipDigests, resolveLatestTag bool) (int, error) {
+	log := logr.FromContextOrDiscard(ctx)
 	keys := []string{}
 	if !(!resolveLatestTag && event.Image.IsLatestTag()) {
 		if tagName, ok := event.Image.TagName(); ok {
 			keys = append(keys, tagName)
+			arches, err := oci.ImageArchitectures(ctx, ociClient, event.Image.Digest)
+			if err != nil {
+				log.Error(err, "could not determine architectures for image", "image", event.Image.String())
+			}
+			for _, arch := range arches {
+				keys = append(keys, oci.ArchTagKey(tagName, arch))
+			}
 		}
 	}
 	if event.Type == oci.DeleteEvent {
-		log := logr.FromContextOrDiscard(ctx)
 		log.Error(errors.New("Shouldn't reach there"), "DeleteEvent should be handled by all()")
 		return 0, nil
 	}

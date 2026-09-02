@@ -9,7 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/containerd/containerd/images"
 	"github.com/go-logr/logr"
+	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/time/rate"
 
 	"github.com/laixintao/piccolo/internal/mux"
@@ -172,7 +174,8 @@ func (r *PiServer) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 }
 
 func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref reference) {
-	if ref.dgst == "" {
+	tagRequest := ref.dgst == ""
+	if tagRequest {
 		var err error
 		ref.dgst, err = r.ociClient.Resolve(req.Context(), ref.name)
 		if err != nil {
@@ -184,6 +187,23 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 	if err != nil {
 		rw.WriteError(http.StatusNotFound, fmt.Errorf("could not get manifest content for digest %s: %w", ref.dgst.String(), err))
 		return
+	}
+	// A tag may resolve locally to a platform specific manifest, for example
+	// when the image was pulled while the tag was single arch. Serving it to
+	// a node with another architecture would make that node pull the wrong
+	// image, so verify the architecture before serving. Indexes are safe to
+	// serve since the puller selects its own platform from them.
+	if tagRequest && isPlatformManifest(mediaType) {
+		if reqArch := req.Header.Get(ArchHeaderKey); reqArch != "" {
+			arch, err := oci.ManifestArchitecture(req.Context(), r.ociClient, b)
+			if err != nil {
+				r.log.Error(err, "could not determine architecture of manifest, serving anyway", "tag", ref.name, "digest", ref.dgst.String())
+			} else if arch != "" && arch != reqArch {
+				metrics.PiServerArchMismatchTotal.WithLabelValues(ref.originalRegistry).Inc()
+				rw.WriteError(http.StatusNotFound, fmt.Errorf("local manifest for tag %s is for architecture %s, but %s was requested", ref.name, arch, reqArch))
+				return
+			}
+		}
 	}
 	rw.Header().Set("Content-Type", mediaType)
 	rw.Header().Set("Content-Length", strconv.FormatInt(int64(len(b)), 10))
@@ -225,6 +245,10 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 	}
 
 	http.ServeContent(rw, req, "", time.Time{}, limitedRC)
+}
+
+func isPlatformManifest(mediaType string) bool {
+	return mediaType == images.MediaTypeDockerSchema2Manifest || mediaType == ocispec.MediaTypeImageManifest
 }
 
 func getClientIP(req *http.Request) string {

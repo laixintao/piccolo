@@ -71,6 +71,10 @@ var (
 		Name: "piccolo_keepalive_total",
 		Help: "Total number of keepalive requests on Pi client side",
 	}, []string{"status"})
+	PiServerArchMismatchTotal = prometheus.NewCounterVec(prometheus.CounterOpts{
+		Name: "piccolo_piserver_arch_mismatch_total",
+		Help: "Total number of tag manifest requests refused because the local manifest architecture does not match the requested architecture.",
+	}, []string{"registry"})
 )
 
 func Register() {
@@ -87,4 +91,5 @@ func Register() {
 	DefaultRegisterer.MustRegister(ContainerdSubscribeTotal)
 	DefaultRegisterer.MustRegister(ContainerdSubscribeEventTotal)
 	DefaultRegisterer.MustRegister(KeepAliveTotal)
+	DefaultRegisterer.MustRegister(PiServerArchMismatchTotal)
 }
