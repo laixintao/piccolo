@@ -267,9 +267,8 @@ func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Req
 	proxy := httputil.NewSingleHostReverseProxy(u)
 	proxy.BufferPool = r.bufferPool
 	proxy.Transport = r.transport
-	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, err error) {
+	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
 		r.log.Error(err, "request to mirror failed")
-		http.Error(rw, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
 		if resp.StatusCode != http.StatusOK {
