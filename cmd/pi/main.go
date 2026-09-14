@@ -42,13 +42,22 @@ type Arguments struct {
 	LogLevel                    slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
 	ResolveLatestTag            bool          `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
 	PiccoloAddress              url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
-	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" help:"pi will update all image states to piccolo for every X minutes."`
+	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" default:"60" help:"Positive interval in minutes between full image state updates."`
 	MaxUploadConnections        int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
 	MaxUploadBlobBytesPerSecond float64       `arg:"--max-upload-blob-bytes-per-second,env:PI_MAX_UPLOAD_BLOB_BYTES_PER_SECOND" default:"1073741824" help:"Max upload speed limition for upload blobs to other pi nodes."`
 	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"2s" help:"Max duration spent finding a mirror."`
 	MirrorResolveRetries        int           `arg:"--mirror-resolve-retries,env:MIRROR_RESOLVE_RETRIES" default:"3" help:"Max amount of mirrors to attempt."`
 	Group                       string        `arg:"--group,env:PI_GROUP,required" help:"The pi group name, pi can only discover other Pis in the same group."`
 	Version                     bool          `arg:"-v,--version" help:"show version"`
+}
+
+func (a Arguments) validate() error {
+	// Converting minutes to time.Duration must produce a positive ticker interval.
+	const maxRefreshMinutes = int64(1<<63-1) / int64(time.Minute)
+	if a.FullRefreshMinutes <= 0 || a.FullRefreshMinutes > maxRefreshMinutes {
+		return fmt.Errorf("--full-refresh-minutes must be between 1 and %d", maxRefreshMinutes)
+	}
+	return nil
 }
 
 func main() {
@@ -62,7 +71,10 @@ func main() {
 	}
 
 	args := &Arguments{}
-	arg.MustParse(args)
+	parser := arg.MustParse(args)
+	if err := args.validate(); err != nil {
+		parser.Fail(err.Error())
+	}
 
 	opts := slog.HandlerOptions{
 		AddSource: true,
