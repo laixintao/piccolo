@@ -67,7 +67,8 @@ func TestOCIClient(t *testing.T) {
 		require.NoError(t, err)
 	}
 	for k, v := range blobs {
-		writer, err := contentStore.Writer(ctx, content.WithRef(k.String()))
+		// Writer refs are locked process-wide, so scope them to this store.
+		writer, err := contentStore.Writer(ctx, content.WithRef(path.Join(contentPath, k.String())))
 		require.NoError(t, err)
 		_, err = writer.Write(v)
 		require.NoError(t, err)

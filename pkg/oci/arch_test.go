@@ -33,7 +33,8 @@ func newTestdataContainerd(t *testing.T) (*Containerd, context.Context) {
 		require.NoError(t, err)
 		b, err := os.ReadFile(path.Join("./testdata/blobs/sha256", item.Name()))
 		require.NoError(t, err)
-		writer, err := contentStore.Writer(ctx, content.WithRef(dgst.String()))
+		// Writer refs are locked process-wide, so scope them to this store.
+		writer, err := contentStore.Writer(ctx, content.WithRef(path.Join(contentPath, dgst.String())))
 		require.NoError(t, err)
 		_, err = writer.Write(b)
 		require.NoError(t, err)
