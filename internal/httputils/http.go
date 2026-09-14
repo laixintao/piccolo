@@ -43,7 +43,12 @@ func DoRequestWithRetry(
 	log := logr.FromContextOrDiscard(ctx)
 
 	ctx, cancelTotal := context.WithTimeout(ctx, totalTimeout)
-	defer cancelTotal()
+	responseReturned := false
+	defer func() {
+		if !responseReturned {
+			cancelTotal()
+		}
+	}()
 
 	for {
 		attempt++
@@ -75,9 +80,9 @@ func DoRequestWithRetry(
 		}
 
 		resp, err := client.Do(req)
-		cancelReq()
 
 		if err != nil {
+			cancelReq()
 			lastErr = err
 			log.Error(err, "http request get error", "attemp", attempt)
 			if metrics != nil {
@@ -87,6 +92,7 @@ func DoRequestWithRetry(
 			switch {
 			case resp.StatusCode >= 500:
 				resp.Body.Close()
+				cancelReq()
 				lastErr = fmt.Errorf("server error: %s", resp.Status)
 				log.Info("http request status code 5xx", "attemp", attempt, "status_code", resp.Status)
 				if metrics != nil {
@@ -95,6 +101,7 @@ func DoRequestWithRetry(
 			case resp.StatusCode == http.StatusNotFound:
 				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
+				cancelReq()
 				if metrics != nil {
 					metrics.WithLabelValues("fail").Inc()
 				}
@@ -102,6 +109,7 @@ func DoRequestWithRetry(
 			case resp.StatusCode >= 400:
 				respBody, _ := io.ReadAll(resp.Body)
 				resp.Body.Close()
+				cancelReq()
 				if metrics != nil {
 					metrics.WithLabelValues("fail").Inc()
 				}
@@ -110,6 +118,12 @@ func DoRequestWithRetry(
 				if metrics != nil {
 					metrics.WithLabelValues("success").Inc()
 				}
+				// Reading the response body still requires both request contexts.
+				resp.Body = &cancelOnCloseBody{ReadCloser: resp.Body, cancel: func() {
+					cancelReq()
+					cancelTotal()
+				}}
+				responseReturned = true
 				return resp, nil
 			}
 		}
@@ -130,6 +144,16 @@ func DoRequestWithRetry(
 			}
 		}
 	}
+}
+
+type cancelOnCloseBody struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (b *cancelOnCloseBody) Close() error {
+	defer b.cancel()
+	return b.ReadCloser.Close()
 }
 
 func getDeadline(ctx context.Context) time.Time {
