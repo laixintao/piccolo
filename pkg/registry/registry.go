@@ -203,7 +203,7 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 
 	defer func() {
 		cacheType := "hit"
-		if rw.Status() != http.StatusOK {
+		if rw.Status() != http.StatusOK && rw.Status() != http.StatusPartialContent {
 			cacheType = "miss"
 		}
 		metrics.MirrorRequestsTotal.WithLabelValues(ref.originalRegistry, cacheType, string(ref.kind)).Inc()
@@ -252,7 +252,7 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 
 func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Request) error {
 
-	// Modify response returns and error on non 200 status code and NOP error handler skips response writing.
+	// ModifyResponse rejects peer responses other than 200 OK and 206 Partial Content.
 	// If proxy fails no response is written and it is tried again against a different mirror.
 	// If the response writer has been written to it means that the request was properly proxied.
 	succeeded := false
@@ -272,8 +272,8 @@ func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Req
 		http.Error(rw, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("expected mirror to respond with 200 OK but received: %s", resp.Status)
+		if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+			return fmt.Errorf("expected mirror to respond with 200 OK or 206 Partial Content but received: %s", resp.Status)
 		}
 		succeeded = true
 		return nil
