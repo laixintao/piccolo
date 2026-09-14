@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/go-logr/logr"
@@ -27,15 +28,28 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 
 	log.Info("Start periodic updates channel.", "durationMinutes", fullRefreshMinutes)
 
+	var workers sync.WaitGroup
+	workers.Add(3)
+	defer workers.Wait()
+
 	fullUpdatesCh := make(chan string, 10)
-	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
+	go func() {
+		defer workers.Done()
+		fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
+	}()
 
 	// random delay avoid all same Pi updates at the same time
-	go startIntervalSync(ctx, fullRefreshMinutes, fullUpdatesCh)
-	go startKeepAlive(ctx, sd)
+	go func() {
+		defer workers.Done()
+		startIntervalSync(ctx, fullRefreshMinutes, fullUpdatesCh)
+	}()
+	go func() {
+		defer workers.Done()
+		startKeepAlive(ctx, sd)
+	}()
 
 	for {
-		ociCtx, calcenOciClient := context.WithCancel(ctx)
+		ociCtx, cancelOciClient := context.WithCancel(ctx)
 		eventCh, errCh, cErrCh, err := ociClient.Subscribe(ociCtx)
 
 		metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
@@ -49,7 +63,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 			for {
 				select {
 				case <-ctx.Done():
-					return nil
+					break SubscribeLoop
 
 				case event, ok := <-eventCh:
 					if !ok {
@@ -61,7 +75,11 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 
 					// Delete event will trigger full upates...
 					if event.Type == oci.DeleteEvent {
-						fullUpdatesCh <- "deleteEvent"
+						select {
+						case fullUpdatesCh <- "deleteEvent":
+						case <-ctx.Done():
+							break SubscribeLoop
+						}
 						continue
 					}
 
@@ -89,7 +107,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 			} // subscribe for
 		}
 
-		calcenOciClient()
+		cancelOciClient()
 		log.Info("the subscriber need to be restarted, but I'll wait 3 seconds...")
 
 		select {
@@ -110,6 +128,7 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 	log := logr.FromContextOrDiscard(ctx)
 	timer := time.NewTimer(FULLUPDATE_WAITTIME)
 	timer.Stop()
+	defer timer.Stop()
 
 	flush := func() {
 		if len(buffer) > 0 {
@@ -121,7 +140,12 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 
 	for {
 		select {
-		case e := <-events:
+		case <-ctx.Done():
+			return
+		case e, ok := <-events:
+			if !ok {
+				return
+			}
 			buffer = append(buffer, e)
 			if len(buffer) == 1 {
 				timer.Reset(FULLUPDATE_WAITTIME)
@@ -246,16 +270,22 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 	interval := time.Duration(intervalMinutes) * time.Minute
 	sleepDuration := randduration.RandomDuration(interval)
 	log.Info("fullUpdatesTimer will be reset in minutes", "minutes", sleepDuration)
+	timer := time.NewTimer(sleepDuration)
+	defer timer.Stop()
 
 	select {
-	case <-time.After(sleepDuration):
+	case <-timer.C:
 		log.Info("Interval update first trigger wait period over.")
 	case <-ctx.Done():
 		return
 	}
 
 	log.Info("Interval update first trigger full sync, then trigger for every", "minutes", intervalMinutes)
-	fullUpdatesCh <- "ticker"
+	select {
+	case fullUpdatesCh <- "ticker":
+	case <-ctx.Done():
+		return
+	}
 
 	// update for const interval
 	expirationTicker := time.NewTicker(interval)
@@ -265,7 +295,11 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 		select {
 		case <-expirationTicker.C:
 			log.Info("By Ticker: Running scheduled image state update")
-			fullUpdatesCh <- "ticker"
+			select {
+			case fullUpdatesCh <- "ticker":
+			case <-ctx.Done():
+				return
+			}
 		case <-ctx.Done():
 			return
 		}
@@ -276,9 +310,11 @@ func startKeepAlive(ctx context.Context, sd sd.ServiceDiscover) {
 	log := logr.FromContextOrDiscard(ctx)
 	sleepDuration := randduration.RandomDuration(HEART_BEAT_INTERVAL)
 	log.Info("Heart beat timer will reset in", "minutes", sleepDuration, "HEART_BEAT_INTERVAL", HEART_BEAT_INTERVAL)
+	timer := time.NewTimer(sleepDuration)
+	defer timer.Stop()
 
 	select {
-	case <-time.After(sleepDuration):
+	case <-timer.C:
 		log.Info("Heart beat first trigger wait period over.")
 	case <-ctx.Done():
 		return
