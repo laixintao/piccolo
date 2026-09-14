@@ -183,8 +183,9 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, model.ImageAdvertiseResponse{
 			Success: false,
-			Message: "Error when delete keys from DB",
+			Message: "Error when querying keys from DB",
 		})
+		return
 	}
 
 	currentKeys := req.Keys
