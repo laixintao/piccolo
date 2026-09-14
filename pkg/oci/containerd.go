@@ -138,19 +138,31 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 				var img Image
 				imageName, eventType, err := getEventImage(envelope.Event)
 				if err != nil {
-					errCh <- err
+					select {
+					case errCh <- err:
+					case <-ctx.Done():
+						return
+					}
 					continue
 				}
 				switch eventType {
 				case CreateEvent, UpdateEvent:
 					cImg, err := client.GetImage(ctx, imageName)
 					if err != nil {
-						errCh <- err
+						select {
+						case errCh <- err:
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 					img, err = Parse(cImg.Name(), cImg.Target().Digest)
 					if err != nil {
-						errCh <- err
+						select {
+						case errCh <- err:
+						case <-ctx.Done():
+							return
+						}
 						continue
 					}
 				case DeleteEvent:
@@ -160,7 +172,11 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 					log := logr.FromContextOrDiscard(ctx)
 					log.Info("Delete image", "imageName", imageName)
 				}
-				imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}
+				select {
+				case imgCh <- ImageEvent{ImageName: imageName, Image: img, Type: eventType}:
+				case <-ctx.Done():
+					return
+				}
 			} // select
 		} // for
 	}() // goroutine
