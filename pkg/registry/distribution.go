@@ -27,7 +27,9 @@ func (r reference) hasLatestTag() bool {
 	if r.name == "" {
 		return false
 	}
-	_, tag, _ := strings.Cut(r.name, ":")
+	// Registry addresses may contain colons for a port or an IPv6 host.
+	repository := r.name[strings.LastIndexByte(r.name, '/')+1:]
+	_, tag, _ := strings.Cut(repository, ":")
 	return tag == "latest"
 }
 
