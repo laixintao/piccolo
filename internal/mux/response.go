@@ -65,6 +65,9 @@ func (r *response) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 
 func (r *response) ReadFrom(rd io.Reader) (int64, error) {
 	n, err := io.Copy(r.ResponseWriter, rd)
+	if n > 0 {
+		r.writtenHeader = true
+	}
 	r.size += n
 	return n, err
 }
