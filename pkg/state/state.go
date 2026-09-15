@@ -56,7 +56,7 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 						log.Info("eventCh closed, restart the subscriber")
 						break SubscribeLoop
 					}
-					log.Info("received image event", "image", event.Image.String(), "type", event.Type)
+					log.Info("received image event", "image", event.Image.String(), "type", event.Type, "namespace", event.Namespace)
 					metrics.ContainerdSubscribeEventTotal.WithLabelValues(string(event.Type)).Add(1)
 
 					// Delete event will trigger full upates...

@@ -31,6 +31,33 @@ func TestNewContainerd(t *testing.T) {
 	require.Equal(t, "local", c.contentPath)
 }
 
+func TestContainerdNamespaceConfiguration(t *testing.T) {
+	t.Parallel()
+	for _, tt := range []struct {
+		value string
+		want  []string
+	}{
+		{value: "k8s.io", want: []string{"k8s.io"}},
+		{value: "k8s.io,default", want: []string{"k8s.io", "default"}},
+		{value: " default, k8s.io,default ", want: []string{"default", "k8s.io"}},
+		{value: ""},
+		{value: "k8s.io,"},
+		{value: ",default"},
+		{value: "k8s.io,,default"},
+		{value: "k8s.io,invalid/namespace"},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			c, err := NewContainerd(context.Background(), "socket", tt.value, mustURLs(t, "https://example.com"))
+			if tt.want == nil {
+				require.ErrorContains(t, err, "invalid containerd namespace")
+				return
+			}
+			require.NoError(t, err)
+			require.Equal(t, tt.want, c.namespaces)
+		})
+	}
+}
+
 func TestCreateFilters(t *testing.T) {
 	t.Parallel()
 

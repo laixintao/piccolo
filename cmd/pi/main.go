@@ -36,7 +36,7 @@ type Arguments struct {
 	MetricsAddr  string `arg:"--metrics-listen-addr,required,env:METRICS_ADDR" help:"address to serve metrics."`
 
 	ContainerdSock              string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
-	ContainerdNamespace         string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
+	ContainerdNamespace         string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Comma-separated containerd namespaces to fetch images from, in tag lookup priority order."`
 	ContainerdContentPath       string        `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
 	Registries                  []url.URL     `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
 	LogLevel                    slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`

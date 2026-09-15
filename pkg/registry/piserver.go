@@ -111,12 +111,17 @@ func (r *PiServer) handle(rw mux.ResponseWriter, req *http.Request) {
 			"latency", latency.String(),
 			"ip", getClientIP(req),
 			"handler", handler,
+			"digest", rw.Header().Get("Docker-Content-Digest"),
+			"bytes_sent", rw.Size(),
+		}
+		if contentRange := rw.Header().Get("Content-Range"); contentRange != "" {
+			kvs = append(kvs, "content_range", contentRange)
 		}
 		if rw.Status() >= 200 && rw.Status() < 300 {
-			r.log.Info("", kvs...)
+			r.log.Info("request-to-pi", kvs...)
 			return
 		}
-		r.log.Error(rw.Error(), "", kvs...)
+		r.log.Error(rw.Error(), "request-to-pi", kvs...)
 	}()
 	metrics.HttpRequestsInflight.WithLabelValues(path).Add(1)
 

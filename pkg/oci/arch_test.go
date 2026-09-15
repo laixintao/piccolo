@@ -44,7 +44,7 @@ func newTestdataContainerd(t *testing.T) (*Containerd, context.Context) {
 
 	containerdClient, err := containerd.New("", containerd.WithServices(containerd.WithContentStore(contentStore)))
 	require.NoError(t, err)
-	return &Containerd{client: containerdClient}, ctx
+	return &Containerd{client: containerdClient, namespaces: []string{"k8s.io"}}, ctx
 }
 
 func TestArchTagKey(t *testing.T) {

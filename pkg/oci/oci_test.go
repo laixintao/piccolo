@@ -78,11 +78,13 @@ func TestOCIClient(t *testing.T) {
 	containerdClient, err := containerd.New("", containerd.WithServices(containerd.WithImageStore(imageStore), containerd.WithContentStore(contentStore)))
 	require.NoError(t, err)
 	remoteContainerd := &Containerd{
-		client: containerdClient,
+		client:     containerdClient,
+		namespaces: []string{"k8s.io"},
 	}
 	localContainerd := &Containerd{
 		contentPath: contentPath,
 		client:      containerdClient,
+		namespaces:  []string{"k8s.io"},
 	}
 
 	for _, ociClient := range []Client{remoteContainerd, localContainerd} {
