@@ -1,7 +1,9 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"path"
@@ -14,6 +16,7 @@ import (
 	ocispec "github.com/opencontainers/image-spec/specs-go/v1"
 	"golang.org/x/time/rate"
 
+	"github.com/laixintao/piccolo/internal/logging"
 	"github.com/laixintao/piccolo/internal/mux"
 	"github.com/laixintao/piccolo/internal/ratelimit"
 	"github.com/laixintao/piccolo/pkg/metrics"
@@ -56,7 +59,7 @@ func WithMaxUploadBlobSpeedBytes(speed float64) PiServerOption {
 func NewPiServer(ociClient oci.Client, group string, log logr.Logger, sd sd.ServiceDiscover, opts ...PiServerOption) *PiServer {
 	r := &PiServer{
 		ociClient:            ociClient,
-		log:                  log,
+		log:                  log.WithValues("component", logging.Upload),
 		sd:                   sd,
 		resolveRetries:       3,
 		resolveTimeout:       20 * time.Millisecond,
@@ -78,14 +81,17 @@ func (r *PiServer) Server(addr string) (*http.Server, error) {
 		return nil, err
 	}
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: m,
+		Addr:     addr,
+		Handler:  m,
+		ErrorLog: slog.NewLogLogger(logr.ToSlogHandler(r.log.WithValues("event", "server_error")), slog.LevelError),
 	}
 	return srv, nil
 }
 
 func (r *PiServer) handle(rw mux.ResponseWriter, req *http.Request) {
 	start := time.Now()
+	req = logging.Request(req, r.log.WithValues("peer", req.RemoteAddr, "client_ip", getClientIP(req), "registry", req.URL.Query().Get("ns"), "path", req.URL.Path, "method", req.Method))
+	log := logr.FromContextOrDiscard(req.Context())
 	handler := ""
 	path := req.URL.Path
 	if strings.HasPrefix(path, "/v2") {
@@ -105,18 +111,25 @@ func (r *PiServer) handle(rw mux.ResponseWriter, req *http.Request) {
 		}
 
 		kvs := []interface{}{
-			"path", req.URL.Path,
+			"event", "request_finished",
 			"status", rw.Status(),
-			"method", req.Method,
 			"latency", latency.String(),
-			"ip", getClientIP(req),
 			"handler", handler,
+			"digest", rw.Header().Get("Docker-Content-Digest"),
+			"bytes_sent", rw.Size(),
 		}
-		if rw.Status() >= 200 && rw.Status() < 300 {
-			r.log.Info("", kvs...)
+		if contentRange := rw.Header().Get("Content-Range"); contentRange != "" {
+			kvs = append(kvs, "content_range", contentRange)
+		}
+		if rw.Status() == http.StatusNotFound && errors.Is(rw.Error(), oci.ErrNotFound) {
+			log.Info("peer content not found", append(kvs, "result", "miss")...)
 			return
 		}
-		r.log.Error(rw.Error(), "", kvs...)
+		if rw.Error() == nil && rw.Status() < 500 {
+			log.Info("peer request finished", kvs...)
+			return
+		}
+		log.Error(rw.Error(), "peer request failed", kvs...)
 	}()
 	metrics.HttpRequestsInflight.WithLabelValues(path).Add(1)
 
@@ -126,6 +139,7 @@ func (r *PiServer) handle(rw mux.ResponseWriter, req *http.Request) {
 		return
 	}
 	if strings.HasPrefix(req.URL.Path, "/v2") && (req.Method == http.MethodGet || req.Method == http.MethodHead) {
+		log.V(4).Info("peer request received", "event", "request_started")
 		handler = r.registryHandler(rw, req)
 		return
 	}
@@ -163,7 +177,7 @@ func (r *PiServer) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 			metrics.HttpRequestsBlobHandlerInflight.WithLabelValues().Add(1)
 			r.handleBlob(rw, req, ref)
 		default:
-			r.log.Info("Max connection reached, refuse this request", "maxUploadConnections", r.maxUploadConnections)
+			logr.FromContextOrDiscard(req.Context()).Info("upload connection limit reached", "event", "upload_rejected", "reason", "connection_limit", "max_connections", r.maxUploadConnections)
 			http.Error(rw, "503 Service Unavailable: Too many connections", http.StatusServiceUnavailable)
 		}
 		return "blob"
@@ -197,7 +211,7 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 		if reqArch := req.Header.Get(ArchHeaderKey); reqArch != "" {
 			arch, err := oci.ManifestArchitecture(req.Context(), r.ociClient, b)
 			if err != nil {
-				r.log.Error(err, "could not determine architecture of manifest, serving anyway", "tag", ref.name, "digest", ref.dgst.String())
+				logr.FromContextOrDiscard(req.Context()).Error(err, "could not determine manifest architecture", "event", "architecture_check_failed", "tag", ref.name, "digest", ref.dgst.String())
 			} else if arch != "" && arch != reqArch {
 				metrics.PiServerArchMismatchTotal.WithLabelValues(ref.originalRegistry).Inc()
 				rw.WriteError(http.StatusNotFound, fmt.Errorf("local manifest for tag %s is for architecture %s, but %s was requested", ref.name, arch, reqArch))
@@ -211,17 +225,14 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 	if req.Method == http.MethodHead {
 		return
 	}
-	_, err = rw.Write(b)
-	if err != nil {
-		r.log.Error(err, "error occurred when writing manifest")
-		return
-	}
+	// The response writer retains write failures for the request summary.
+	_, _ = rw.Write(b)
 }
 
 func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref reference) {
 	size, err := r.ociClient.Size(req.Context(), ref.dgst)
 	if err != nil {
-		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("could not determine size of blob with digest %s: %w", ref.dgst.String(), err))
+		writeBlobError(rw, fmt.Errorf("could not determine size of blob with digest %s: %w", ref.dgst.String(), err))
 		return
 	}
 	rw.Header().Set("Accept-Ranges", "bytes")
@@ -234,7 +245,7 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 
 	rc, err := r.ociClient.GetBlob(req.Context(), ref.dgst)
 	if err != nil {
-		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("could not get reader for blob with digest %s: %w", ref.dgst.String(), err))
+		writeBlobError(rw, fmt.Errorf("could not get reader for blob with digest %s: %w", ref.dgst.String(), err))
 		return
 	}
 	defer rc.Close()
@@ -245,6 +256,17 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 	}
 
 	http.ServeContent(rw, req, "", time.Time{}, limitedRC)
+}
+
+func writeBlobError(rw mux.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, oci.ErrNotFound) {
+		status = http.StatusNotFound
+	}
+	// Content can disappear between Size and GetBlob. An empty error response
+	// must not retain the size of the original blob.
+	rw.Header().Del("Content-Length")
+	rw.WriteError(status, err)
 }
 
 func isPlatformManifest(mediaType string) bool {

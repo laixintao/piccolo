@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httputil"
@@ -19,6 +20,7 @@ import (
 
 	"github.com/laixintao/piccolo/internal/buffer"
 	"github.com/laixintao/piccolo/internal/httputils"
+	"github.com/laixintao/piccolo/internal/logging"
 	"github.com/laixintao/piccolo/internal/mux"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/oci"
@@ -82,7 +84,7 @@ func WithLocalArch(arch string) Option {
 func NewRegistry(sd sd.ServiceDiscover, log logr.Logger, opts ...Option) *Registry {
 	r := &Registry{
 		sd:               sd,
-		log:              log,
+		log:              log.WithValues("component", logging.Download),
 		resolveRetries:   3,
 		resolveTimeout:   2 * time.Second,
 		resolveLatestTag: true,
@@ -110,15 +112,19 @@ func (r *Registry) Server(addr string) (*http.Server, error) {
 		return nil, err
 	}
 	srv := &http.Server{
-		Addr:    addr,
-		Handler: m,
+		Addr:     addr,
+		Handler:  m,
+		ErrorLog: slog.NewLogLogger(logr.ToSlogHandler(r.log.WithValues("event", "server_error")), slog.LevelError),
 	}
 	return srv, nil
 }
 
 func (r *Registry) handle(rw mux.ResponseWriter, req *http.Request) {
 	start := time.Now()
+	req = logging.Request(req, r.log.WithValues("client_ip", getClientIP(req), "registry", req.URL.Query().Get("ns"), "path", req.URL.Path, "method", req.Method))
+	log := logr.FromContextOrDiscard(req.Context())
 	handler := ""
+	result := "error"
 	path := req.URL.Path
 	if strings.HasPrefix(path, "/v2") {
 		path = "/v2/*"
@@ -135,44 +141,48 @@ func (r *Registry) handle(rw mux.ResponseWriter, req *http.Request) {
 		if req.URL.Path == "/healthz" {
 			return
 		}
+		if rw.Status() >= 500 || (rw.Error() != nil && result == "hit") {
+			result = "error"
+		}
 
 		kvs := []interface{}{
-			"path", req.URL.Path,
+			"event", "request_finished",
 			"status", rw.Status(),
-			"method", req.Method,
 			"latency", latency.String(),
-			"ip", getClientIP(req),
 			"handler", handler,
+			"result", result,
+			"digest", rw.Header().Get("Docker-Content-Digest"),
+			"bytes_sent", rw.Size(),
 		}
-		if rw.Status() >= 200 && rw.Status() < 300 {
-			r.log.Info("", kvs...)
+		if rw.Status() < 500 && result != "error" {
+			log.Info("containerd request finished", kvs...)
 			return
 		}
-		r.log.Error(rw.Error(), "request-to-registry", kvs...)
+		log.Error(rw.Error(), "containerd request failed", kvs...)
 	}()
 	metrics.HttpRequestsInflight.WithLabelValues(path).Add(1)
 
 	if strings.HasPrefix(req.URL.Path, "/v2") && (req.Method == http.MethodGet || req.Method == http.MethodHead) {
-		handler = r.registryHandler(rw, req)
+		log.V(4).Info("containerd request received", "event", "request_started")
+		handler, result = r.registryHandler(rw, req)
 		return
 	}
 	rw.WriteHeader(http.StatusNotFound)
 }
 
-func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) string {
+func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) (string, string) {
 	// Quickly return 200 for /v2 to indicate that registry supports v2.
 	if path.Clean(req.URL.Path) == "/v2" {
 		rw.WriteHeader(http.StatusOK)
-		return "v2"
+		return "v2", "ok"
 	}
 
 	// Parse out path components from request.
 	originalRegistry := req.URL.Query().Get("ns")
-	r.log.Info("request v2 registry", "path", req.URL, "method", req.Method)
 	ref, err := parsePathComponents(originalRegistry, req.URL.Path)
 	if err != nil {
 		rw.WriteError(http.StatusNotFound, fmt.Errorf("could not parse path according to OCI distribution spec: %w", err))
-		return "registry"
+		return "registry", "invalid_request"
 	}
 
 	// Request with mirror header are proxied.
@@ -182,15 +192,14 @@ func (r *Registry) registryHandler(rw mux.ResponseWriter, req *http.Request) str
 		// Tell the serving peer which architecture we expect, so it can
 		// refuse to serve a manifest for another architecture.
 		req.Header.Set(ArchHeaderKey, r.localArch)
-		r.handleMirror(rw, req, ref)
-		return "mirror"
+		return "mirror", r.handleMirror(rw, req, ref)
 	}
 
-	r.log.Error(errors.New("request mirrored already"), "This request has already been mirrored")
-	return "error"
+	rw.WriteError(http.StatusNotFound, errors.New("request has already been mirrored"))
+	return "registry", "error"
 }
 
-func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref reference) {
+func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref reference) string {
 	key := ref.dgst.String()
 	if key == "" {
 		// Digest keys are content addressed and therefore architecture safe.
@@ -199,20 +208,20 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 		key = oci.ArchTagKey(ref.name, r.localArch)
 	}
 
-	log := r.log.WithValues("key", key, "path", req.URL.Path, "ip", getClientIP(req))
+	log := logr.FromContextOrDiscard(req.Context()).WithValues("key", key)
+	req = req.WithContext(logr.NewContext(req.Context(), log))
 
 	defer func() {
 		cacheType := "hit"
-		if rw.Status() != http.StatusOK {
+		if rw.Status() != http.StatusOK && rw.Status() != http.StatusPartialContent {
 			cacheType = "miss"
 		}
 		metrics.MirrorRequestsTotal.WithLabelValues(ref.originalRegistry, cacheType, string(ref.kind)).Inc()
 	}()
 
 	if !r.resolveLatestTag && ref.hasLatestTag() {
-		r.log.V(4).Info("skipping mirror request for image with latest tag", "image", ref.name)
 		rw.WriteHeader(http.StatusNotFound)
-		return
+		return "latest_tag_skipped"
 	}
 
 	// Resolve mirror with the requested key
@@ -224,35 +233,42 @@ func (r *Registry) handleMirror(rw mux.ResponseWriter, req *http.Request, ref re
 	if err != nil {
 		if errors.Is(err, httputils.ErrNotFound) {
 			rw.WriteError(http.StatusNotFound, err)
-			return
+			return "miss"
 		}
 		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("error occurred when attempting to resolve mirrors: %w", err))
-		return
+		return "error"
 	}
 
-	for _, peer := range peers {
+	for attempt, peer := range peers {
 		select {
 		case <-req.Context().Done():
 			// Request has been closed by server or client. No use continuing.
 			rw.WriteError(http.StatusNotFound, fmt.Errorf("mirroring for image component %s has been cancelled: %w", key, resolveCtx.Err()))
-			return
+			return "canceled"
 		default:
+			start := time.Now()
+			log.V(4).Info("trying peer", "event", "peer_attempt", "peer", peer, "attempt", attempt+1)
 			err := r.try(peer, rw, req)
 			if err != nil {
-				r.log.Error(err, "request failed when try peer", "peer", peer)
+				log.Error(err, "peer download failed", "event", "peer_failed", "peer", peer, "attempt", attempt+1, "latency", time.Since(start).String())
 			} else {
-				r.log.Info("Mirror successfully handled")
-				return
+				if rw.Error() != nil || rw.Status() >= 500 {
+					return "error"
+				}
+				log.Info("peer response forwarded to containerd", "event", "peer_download_finished", "peer", peer, "bytes_sent", rw.Size(), "status", rw.Status(), "latency", time.Since(start).String())
+				return "hit"
 			}
 		}
 	}
-	r.log.Info("WARN: all peers failed or timeout reached")
+	log.Info("no peer served the request", "event", "mirror_miss", "peer_count", len(peers))
 	rw.WriteHeader(http.StatusNotFound)
+	return "miss"
 }
 
 func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Request) error {
 
-	// Modify response returns and error on non 200 status code and NOP error handler skips response writing.
+	// Reject unsuccessful responses without writing to containerd, so another
+	// peer can be tried before committing response headers or a body.
 	// If proxy fails no response is written and it is tried again against a different mirror.
 	// If the response writer has been written to it means that the request was properly proxied.
 	succeeded := false
@@ -267,20 +283,26 @@ func (r *Registry) try(peer netip.AddrPort, rw mux.ResponseWriter, req *http.Req
 	proxy := httputil.NewSingleHostReverseProxy(u)
 	proxy.BufferPool = r.bufferPool
 	proxy.Transport = r.transport
-	proxy.ErrorHandler = func(rw http.ResponseWriter, _ *http.Request, err error) {
-		r.log.Error(err, "request to mirror failed")
-		http.Error(rw, "Bad Gateway: "+err.Error(), http.StatusBadGateway)
+	log := logr.FromContextOrDiscard(req.Context()).WithValues("peer", peer)
+	proxy.ErrorLog = slog.NewLogLogger(logr.ToSlogHandler(log.WithValues("event", "proxy_error")), slog.LevelError)
+	var proxyErr error
+	proxy.ErrorHandler = func(_ http.ResponseWriter, _ *http.Request, err error) {
+		proxyErr = err
 	}
 	proxy.ModifyResponse = func(resp *http.Response) error {
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("expected mirror to respond with 200 OK but received: %s", resp.Status)
+		partial := req.Header.Get("Range") != "" && resp.StatusCode == http.StatusPartialContent
+		if resp.StatusCode != http.StatusOK && !partial {
+			return fmt.Errorf("unexpected mirror response: %s", resp.Status)
 		}
 		succeeded = true
 		return nil
 	}
 	proxy.ServeHTTP(rw, req)
 	if !succeeded {
-		return errors.New("Fail to mirror request")
+		if proxyErr == nil {
+			proxyErr = errors.New("peer did not return a successful response")
+		}
+		return proxyErr
 	}
 	return nil
 }

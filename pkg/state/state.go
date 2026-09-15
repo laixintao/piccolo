@@ -8,6 +8,7 @@ import (
 
 	"github.com/go-logr/logr"
 
+	"github.com/laixintao/piccolo/internal/logging"
 	"github.com/laixintao/piccolo/internal/randduration"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/oci"
@@ -23,9 +24,10 @@ const (
 func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 	fullRefreshMinutes int64,
 	resolveLatestTag bool) error {
-	log := logr.FromContextOrDiscard(ctx)
+	log := logr.FromContextOrDiscard(ctx).WithValues("component", logging.Piccolo, "subsystem", "state")
+	ctx = logr.NewContext(ctx, log)
 
-	log.Info("Start periodic updates channel.", "durationMinutes", fullRefreshMinutes)
+	log.Info("image tracking started", "event", "tracking_started", "refresh_minutes", fullRefreshMinutes)
 
 	fullUpdatesCh := make(chan string, 10)
 	go fullUpdateProcessor(fullUpdatesCh, ctx, ociClient, sd, resolveLatestTag)
@@ -41,9 +43,9 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 		metrics.ContainerdSubscribeTotal.WithLabelValues("success").Add(1)
 		if err != nil {
 			metrics.ContainerdSubscribeTotal.WithLabelValues("fail").Add(1)
-			log.Error(err, "Error when subscribe events from containerd, restart tracker.")
+			log.Error(err, "containerd subscription failed", "event", "subscription_failed")
 		} else {
-			log.Info("Subscribed from containerd")
+			log.Info("containerd image subscription established", "event", "subscription_started")
 
 		SubscribeLoop:
 			for {
@@ -53,10 +55,12 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 
 				case event, ok := <-eventCh:
 					if !ok {
-						log.Info("eventCh closed, restart the subscriber")
+						log.Info("containerd image event stream closed", "event", "subscription_closed", "stream", "images")
 						break SubscribeLoop
 					}
-					log.Info("received image event", "image", event.Image.String(), "type", event.Type)
+					eventCtx := logging.Context(ctx, log.WithValues("image", event.ImageName, "namespace", event.Namespace))
+					eventLog := logr.FromContextOrDiscard(eventCtx)
+					eventLog.V(4).Info("containerd image event received", "event", "image_event", "event_type", event.Type, "digest", event.Image.Digest.String())
 					metrics.ContainerdSubscribeEventTotal.WithLabelValues(string(event.Type)).Add(1)
 
 					// Delete event will trigger full upates...
@@ -65,38 +69,38 @@ func Track(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover,
 						continue
 					}
 
-					if _, err := update(ctx, ociClient, sd, event, false, resolveLatestTag); err != nil {
-						log.Error(err, "received error when updating image")
+					if _, err := update(eventCtx, ociClient, sd, event, false, resolveLatestTag); err != nil {
+						eventLog.Error(err, "image advertisement failed", "event", "image_update_failed")
 						continue
 					}
 				// SDK error, can not found image, in this case, no need to
 				// restart the subscribe
 				case err, ok := <-errCh:
 					if !ok {
-						log.Info("errCh closed, restart the subscriber")
+						log.Info("containerd event stream closed", "event", "subscription_closed")
 						break SubscribeLoop
 					}
-					log.Error(err, "error event from subscriber (errCh)")
+					log.Error(err, "containerd image event could not be read", "event", "image_event_failed")
 					continue
 				case err, ok := <-cErrCh:
 					if !ok {
-						log.Info("errCh closed, restart the subscriber")
+						log.Info("containerd event stream closed", "event", "subscription_closed")
 						break SubscribeLoop
 					}
-					log.Error(err, "event channel error, restart the subscriber.")
+					log.Error(err, "containerd event stream failed", "event", "subscription_failed")
 					break SubscribeLoop
 				} // select
 			} // subscribe for
 		}
 
 		calcenOciClient()
-		log.Info("the subscriber need to be restarted, but I'll wait 3 seconds...")
+		log.Info("retrying containerd subscription", "event", "subscription_retry", "delay", "3s")
 
 		select {
 		case <-time.After(time.Duration(3) * time.Second):
-			log.Info("Now restart subscribe containerd")
+			log.V(4).Info("restarting containerd subscription", "event", "subscription_restarting")
 		case <-ctx.Done():
-			log.Info("context canceled, terminate tracker")
+			log.Info("image tracking stopped", "event", "tracking_stopped")
 			return nil
 		}
 
@@ -127,22 +131,31 @@ func fullUpdateProcessor(events <-chan string, ctx context.Context, ociClient oc
 				timer.Reset(FULLUPDATE_WAITTIME)
 			}
 			if len(buffer) >= MAX_DELETION_EVENTS {
-				log.Info("Full updated triggered due to have 10 events", "lenBuffer", len(buffer))
+				log.V(4).Info("full sync triggered by event count", "event", "full_sync_triggered", "event_count", len(buffer))
 				flush()
 			}
 		case <-timer.C:
-			log.Info("Full updated triggered due to wait time passed since last event", "lenBuffer", len(buffer), "waitTime", FULLUPDATE_WAITTIME, "buffer", buffer)
+			log.V(4).Info("full sync triggered after batching events", "event", "full_sync_triggered", "event_count", len(buffer), "wait", FULLUPDATE_WAITTIME.String(), "triggers", buffer)
 			flush()
 		}
 	}
 }
 
-func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) error {
-	log := logr.FromContextOrDiscard(ctx).V(4)
+func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resolveLatestTag bool) (retErr error) {
+	ctx = logging.Context(ctx, logr.FromContextOrDiscard(ctx))
+	log := logr.FromContextOrDiscard(ctx)
+	start := time.Now()
+	defer func() {
+		if retErr != nil {
+			log.Error(retErr, "full image sync failed", "event", "full_sync_finished", "result", "error", "latency", time.Since(start).String())
+			return
+		}
+		log.Info("full image sync finished", "event", "full_sync_finished", "result", "ok", "latency", time.Since(start).String())
+	}()
 	imgs, err := ociClient.ListImages(ctx)
-	log.Info("Exeucte a full updates, list images: ", "imgs", imgs)
+	log.V(4).Info("images collected for full sync", "event", "images_listed", "image_count", len(imgs))
 	if err != nil {
-		log.Error(err, "ociClient.ListImages returns error")
+		log.Error(err, "could not list images for full sync", "event", "image_list_failed")
 		return err
 	}
 
@@ -164,7 +177,7 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 				// architecture is never routed to this node for the tag.
 				arches, err := oci.ImageArchitectures(ctx, ociClient, img.Digest)
 				if err != nil {
-					log.Error(err, "could not determine architectures for image", "image", img.String())
+					log.Error(err, "could not determine image architectures", "event", "architecture_check_failed", "image", img.String())
 				}
 				for _, arch := range arches {
 					keys[oci.ArchTagKey(tagName, arch)] = img.Registry
@@ -190,7 +203,7 @@ func all(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, resol
 		keyList = append(keyList, key)
 		metrics.AdvertisedKeys.WithLabelValues(reg).Add(1)
 	}
-	log.Info("Sync all images", "totalKeys", len(keyList))
+	log.Info("image keys ready for full sync", "event", "full_sync_prepared", "image_count", len(imgs), "key_count", len(keyList))
 	err = sd.Sync(ctx, keyList)
 	if err != nil {
 		return err
@@ -206,7 +219,7 @@ func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ev
 			keys = append(keys, tagName)
 			arches, err := oci.ImageArchitectures(ctx, ociClient, event.Image.Digest)
 			if err != nil {
-				log.Error(err, "could not determine architectures for image", "image", event.Image.String())
+				log.Error(err, "could not determine image architectures", "event", "architecture_check_failed", "digest", event.Image.Digest.String())
 			}
 			for _, arch := range arches {
 				keys = append(keys, oci.ArchTagKey(tagName, arch))
@@ -214,7 +227,7 @@ func update(ctx context.Context, ociClient oci.Client, sd sd.ServiceDiscover, ev
 		}
 	}
 	if event.Type == oci.DeleteEvent {
-		log.Error(errors.New("Shouldn't reach there"), "DeleteEvent should be handled by all()")
+		log.Error(errors.New("delete event requires full sync"), "unexpected delete event in incremental update", "event", "image_update_failed")
 		return 0, nil
 	}
 	if !skipDigests {
@@ -245,16 +258,16 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 	log := logr.FromContextOrDiscard(ctx)
 	interval := time.Duration(intervalMinutes) * time.Minute
 	sleepDuration := randduration.RandomDuration(interval)
-	log.Info("fullUpdatesTimer will be reset in minutes", "minutes", sleepDuration)
+	log.V(4).Info("full sync scheduled", "event", "full_sync_scheduled", "delay", sleepDuration.String(), "interval", interval.String())
 
 	select {
 	case <-time.After(sleepDuration):
-		log.Info("Interval update first trigger wait period over.")
+		log.V(4).Info("initial full sync delay elapsed", "event", "full_sync_due")
 	case <-ctx.Done():
 		return
 	}
 
-	log.Info("Interval update first trigger full sync, then trigger for every", "minutes", intervalMinutes)
+	log.V(4).Info("periodic full sync started", "event", "full_sync_timer_started", "interval", interval.String())
 	fullUpdatesCh <- "ticker"
 
 	// update for const interval
@@ -264,7 +277,7 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 	for {
 		select {
 		case <-expirationTicker.C:
-			log.Info("By Ticker: Running scheduled image state update")
+			log.V(4).Info("periodic full sync due", "event", "full_sync_due")
 			fullUpdatesCh <- "ticker"
 		case <-ctx.Done():
 			return
@@ -275,18 +288,18 @@ func startIntervalSync(ctx context.Context, intervalMinutes int64, fullUpdatesCh
 func startKeepAlive(ctx context.Context, sd sd.ServiceDiscover) {
 	log := logr.FromContextOrDiscard(ctx)
 	sleepDuration := randduration.RandomDuration(HEART_BEAT_INTERVAL)
-	log.Info("Heart beat timer will reset in", "minutes", sleepDuration, "HEART_BEAT_INTERVAL", HEART_BEAT_INTERVAL)
+	log.V(4).Info("keepalive scheduled", "event", "keepalive_scheduled", "delay", sleepDuration.String(), "interval", HEART_BEAT_INTERVAL.String())
 
 	select {
 	case <-time.After(sleepDuration):
-		log.Info("Heart beat first trigger wait period over.")
+		log.V(4).Info("initial keepalive delay elapsed", "event", "keepalive_due")
 	case <-ctx.Done():
 		return
 	}
 
-	log.Info("First heart beat starts, then trigger for every", "duration", HEART_BEAT_INTERVAL)
+	log.V(4).Info("periodic keepalive started", "event", "keepalive_timer_started", "interval", HEART_BEAT_INTERVAL.String())
 	if err := sd.DoKeepAlive(ctx); err != nil {
-		log.Error(err, "Error when do keepalive")
+		log.Error(err, "keepalive failed", "event", "keepalive_failed")
 	}
 
 	// update for const interval
@@ -296,9 +309,9 @@ func startKeepAlive(ctx context.Context, sd sd.ServiceDiscover) {
 	for {
 		select {
 		case <-keepaliveTicker.C:
-			log.Info("By Ticker: Running scheduled image state update")
+			log.V(4).Info("periodic keepalive due", "event", "keepalive_due")
 			if err := sd.DoKeepAlive(ctx); err != nil {
-				log.Error(err, "Error when do keepalive")
+				log.Error(err, "keepalive failed", "event", "keepalive_failed")
 			}
 		case <-ctx.Done():
 			return

@@ -27,8 +27,10 @@ func (r reference) hasLatestTag() bool {
 	if r.name == "" {
 		return false
 	}
-	_, tag, _ := strings.Cut(r.name, ":")
-	return tag == "latest"
+	// A registry may include a port (or an IPv6 address). The tag is the
+	// suffix of the repository name, after the final slash.
+	_, repository, _ := strings.Cut(r.name, "/")
+	return strings.HasSuffix(repository, ":latest")
 }
 
 // Package is used to parse components from requests which comform with the OCI distribution spec.

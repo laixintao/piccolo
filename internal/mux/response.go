@@ -42,6 +42,9 @@ func (r *response) Write(b []byte) (int, error) {
 	r.writtenHeader = true
 	n, err := r.ResponseWriter.Write(b)
 	r.size += int64(n)
+	if err != nil {
+		r.error = err
+	}
 	return n, err
 }
 
@@ -69,6 +72,9 @@ func (r *response) ReadFrom(rd io.Reader) (int64, error) {
 		r.writtenHeader = true
 	}
 	r.size += n
+	if err != nil {
+		r.error = err
+	}
 	return n, err
 }
 

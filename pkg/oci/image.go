@@ -30,6 +30,7 @@ type ImageEvent struct {
 	ImageName string
 	Image     Image
 	Type      EventType
+	Namespace string
 }
 
 func NewImage(name, registry, repository, tag string, dgst digest.Digest) (Image, error) {

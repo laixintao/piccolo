@@ -33,7 +33,9 @@ func newTestdataContainerd(t *testing.T) (*Containerd, context.Context) {
 		require.NoError(t, err)
 		b, err := os.ReadFile(path.Join("./testdata/blobs/sha256", item.Name()))
 		require.NoError(t, err)
-		writer, err := contentStore.Writer(ctx, content.WithRef(dgst.String()))
+		// The local store's ingest locks are process-wide, including across
+		// different stores used by parallel tests.
+		writer, err := contentStore.Writer(ctx, content.WithRef(contentPath+":"+dgst.String()))
 		require.NoError(t, err)
 		_, err = writer.Write(b)
 		require.NoError(t, err)
@@ -44,7 +46,7 @@ func newTestdataContainerd(t *testing.T) (*Containerd, context.Context) {
 
 	containerdClient, err := containerd.New("", containerd.WithServices(containerd.WithContentStore(contentStore)))
 	require.NoError(t, err)
-	return &Containerd{client: containerdClient}, ctx
+	return &Containerd{client: containerdClient, namespaces: []string{"k8s.io"}}, ctx
 }
 
 func TestArchTagKey(t *testing.T) {

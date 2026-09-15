@@ -14,6 +14,7 @@ import (
 
 	"github.com/alexflint/go-arg"
 	"github.com/go-logr/logr"
+	"github.com/laixintao/piccolo/internal/logging"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/laixintao/piccolo/pkg/oci"
 	"github.com/laixintao/piccolo/pkg/registry"
@@ -36,7 +37,7 @@ type Arguments struct {
 	MetricsAddr  string `arg:"--metrics-listen-addr,required,env:METRICS_ADDR" help:"address to serve metrics."`
 
 	ContainerdSock              string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
-	ContainerdNamespace         string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Containerd namespace to fetch images from."`
+	ContainerdNamespaces        []string      `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" help:"Containerd namespaces to fetch images from, in tag lookup priority order."`
 	ContainerdContentPath       string        `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
 	Registries                  []url.URL     `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
 	LogLevel                    slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
@@ -60,9 +61,13 @@ func (a Arguments) validate() error {
 	return nil
 }
 
-func main() {
-	fmt.Println("Hello, Pi!")
+func newArguments() *Arguments {
+	// go-arg does not support default tags on slices; initialize the list so
+	// its normal CLI/env precedence and help output still apply.
+	return &Arguments{ContainerdNamespaces: []string{"k8s.io"}}
+}
 
+func main() {
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-v" {
 			fmt.Printf("Pi Version: %s\nCommit: %s\nBuilt: %s\n", version, commit, date)
@@ -70,7 +75,7 @@ func main() {
 		}
 	}
 
-	args := &Arguments{}
+	args := newArguments()
 	parser := arg.MustParse(args)
 	if err := args.validate(); err != nil {
 		parser.Fail(err.Error())
@@ -81,19 +86,22 @@ func main() {
 		Level:     args.LogLevel,
 	}
 	handler := slog.NewTextHandler(os.Stdout, &opts)
-	log := logr.FromSlogHandler(handler)
-	log.Info("log init")
+	log := logr.FromSlogHandler(handler).WithValues("service", "pi")
+	uploadLog := log.WithValues("component", logging.Upload)
+	downloadLog := log.WithValues("component", logging.Download)
+	controlLog := log.WithValues("component", logging.Piccolo)
+	controlLog.Info("pi starting", "event", "startup", "subsystem", "lifecycle", "version", version, "group", args.Group)
 	ctx := logr.NewContext(context.Background(), log)
-	ociClient, err := oci.NewContainerd(ctx, args.ContainerdSock, args.ContainerdNamespace, args.Registries, oci.WithContentPath(args.ContainerdContentPath))
+	ociClient, err := oci.NewContainerd(logr.NewContext(ctx, controlLog.WithValues("subsystem", "containerd")), args.ContainerdSock, args.ContainerdNamespaces, args.Registries, oci.WithContentPath(args.ContainerdContentPath))
 	if err != nil {
-		log.Error(err, "run exit with error")
+		controlLog.Error(err, "containerd client initialization failed", "event", "startup_failed", "subsystem", "containerd")
 		os.Exit(1)
 	}
-	log.Info("containerd sdk init")
+	controlLog.V(4).Info("containerd client initialized", "event", "startup_ready", "subsystem", "containerd")
 
 	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group)
 	if err != nil {
-		log.Error(err, "NewPiccoloServiceDiscover error")
+		controlLog.Error(err, "Piccolo client initialization failed", "event", "startup_failed")
 		os.Exit(1)
 	}
 
@@ -101,18 +109,18 @@ func main() {
 
 	err = startMetricsServer(ctx, args.MetricsAddr, g)
 	if err != nil {
-		log.Error(err, "Error when start Pi Server")
+		controlLog.Error(err, "metrics server failed to start", "event", "startup_failed", "subsystem", "metrics")
 		os.Exit(1)
 	}
-	log.Info("Metrics server started", "address", args.PiAddr)
+	controlLog.Info("metrics server started", "event", "server_started", "subsystem", "metrics", "address", args.MetricsAddr)
 
 	// Pi Server
 	err = startPiServer(ctx, args.Group, args.MaxUploadConnections, args.MaxUploadBlobBytesPerSecond, ociClient, piccoloSD, log, args.PiAddr, g)
 	if err != nil {
-		log.Error(err, "Error when start Pi Server")
+		uploadLog.Error(err, "peer upload server failed to start", "event", "startup_failed")
 		os.Exit(1)
 	}
-	log.Info("Start Pi server", "address", args.PiAddr, "MaxUploadBlobBytesPerSecond", args.MaxUploadBlobBytesPerSecond)
+	uploadLog.Info("peer upload server started", "event", "server_started", "address", args.PiAddr, "max_bytes_per_second", args.MaxUploadBlobBytesPerSecond)
 
 	// Registry
 	registryOpts := []registry.Option{
@@ -122,10 +130,10 @@ func main() {
 	}
 	err = startRegistryServer(ctx, ociClient, piccoloSD, log, args.RegistryAddr, g, registryOpts...)
 	if err != nil {
-		log.Error(err, "Error when start Registry Server")
+		downloadLog.Error(err, "containerd registry server failed to start", "event", "startup_failed")
 		os.Exit(1)
 	}
-	log.Info("Start registry server", "address", args.RegistryAddr)
+	downloadLog.Info("containerd registry server started", "event", "server_started", "address", args.RegistryAddr)
 
 	// State tracking
 	g.Go(func() error {
@@ -134,7 +142,7 @@ func main() {
 
 	err = g.Wait()
 	if err != nil {
-		log.Error(err, "Error when g.Wait()")
+		controlLog.Error(err, "pi stopped with an error", "event", "shutdown_failed", "subsystem", "lifecycle")
 		os.Exit(1)
 	}
 }
@@ -153,7 +161,7 @@ func startPiServer(ctx context.Context, group string, maxConnection int,
 	}
 	g.Go(func() error {
 		if err := regSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+			return fmt.Errorf("upload server: %w", err)
 		}
 		return nil
 	})
@@ -176,7 +184,7 @@ func startRegistryServer(ctx context.Context,
 
 	g.Go(func() error {
 		if err := regSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+			return fmt.Errorf("download server: %w", err)
 		}
 		return nil
 	})
@@ -219,12 +227,13 @@ func startMetricsServer(ctx context.Context,
 	mux.Handle("/debug/pprof/block", pprof.Handler("block"))
 	mux.Handle("/debug/pprof/mutex", pprof.Handler("mutex"))
 	metricsSrv := &http.Server{
-		Addr:    metricsAddr,
-		Handler: mux,
+		Addr:     metricsAddr,
+		Handler:  mux,
+		ErrorLog: slog.NewLogLogger(logr.ToSlogHandler(logr.FromContextOrDiscard(ctx).WithValues("component", logging.Piccolo, "subsystem", "metrics", "event", "server_error")), slog.LevelError),
 	}
 	g.Go(func() error {
 		if err := metricsSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			return err
+			return fmt.Errorf("metrics server: %w", err)
 		}
 		return nil
 	})
