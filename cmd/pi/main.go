@@ -44,6 +44,7 @@ type Arguments struct {
 	ResolveLatestTag            bool          `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
 	PiccoloAddress              url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
 	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" default:"60" help:"Positive interval in minutes between full image state updates."`
+	AdvertiseCacheMaxKeys       int           `arg:"--advertise-cache-max-keys,env:ADVERTISE_CACHE_MAX_KEYS" default:"100000" help:"Maximum number of keys cached for five-hour advertisement deduplication. Must be positive."`
 	MaxUploadConnections        int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
 	MaxUploadBlobBytesPerSecond float64       `arg:"--max-upload-blob-bytes-per-second,env:PI_MAX_UPLOAD_BLOB_BYTES_PER_SECOND" default:"1073741824" help:"Max upload speed limition for upload blobs to other pi nodes."`
 	MirrorResolveTimeout        time.Duration `arg:"--mirror-resolve-timeout,env:MIRROR_RESOLVE_TIMEOUT" default:"2s" help:"Max duration spent finding a mirror."`
@@ -57,6 +58,9 @@ func (a Arguments) validate() error {
 	const maxRefreshMinutes = int64(1<<63-1) / int64(time.Minute)
 	if a.FullRefreshMinutes <= 0 || a.FullRefreshMinutes > maxRefreshMinutes {
 		return fmt.Errorf("--full-refresh-minutes must be between 1 and %d", maxRefreshMinutes)
+	}
+	if a.AdvertiseCacheMaxKeys <= 0 {
+		return errors.New("--advertise-cache-max-keys must be positive")
 	}
 	return nil
 }
@@ -99,7 +103,8 @@ func main() {
 	}
 	controlLog.V(4).Info("containerd client initialized", "event", "startup_ready", "subsystem", "containerd")
 
-	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group)
+	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group,
+		sd.WithAdvertiseCacheMaxKeys(args.AdvertiseCacheMaxKeys))
 	if err != nil {
 		controlLog.Error(err, "Piccolo client initialization failed", "event", "startup_failed")
 		os.Exit(1)
