@@ -50,7 +50,7 @@ type FindKeyRequest struct {
 	Key         string `form:"key" binding:"required"`
 	Group       string `form:"group" binding:"required"`
 	Count       int    `form:"count"`
-	RequestHost string `form:"request_host"`
+	RequestHost string `form:"request_host"` // Exclude this IP and prioritize nearby holders.
 }
 
 type FindKeyResponse struct {
