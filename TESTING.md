@@ -9,7 +9,8 @@ go test -race -count=1 -timeout=5m ./...
 
 The Go tests use temporary directories, local OCI fixtures, and in-process
 services. They do not require a running containerd daemon, MySQL database, or
-access to an image registry. Coverage includes OCI image traversal and
+access to an image registry. Coverage includes namespace CLI/environment list
+parsing and precedence, OCI image traversal and
 architecture selection, containerd namespace event filtering and content lookup,
 registry request handling, log correlation between components, API retry and
 cache-miss logging, buffer pooling, and HTTP response tracking.

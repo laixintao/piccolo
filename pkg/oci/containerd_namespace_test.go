@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -35,7 +36,7 @@ type namespaceFixture struct {
 	contentPath string
 }
 
-func newNamespaceFixture(t *testing.T, selected string) *namespaceFixture {
+func newNamespaceFixture(t *testing.T, selected []string) *namespaceFixture {
 	t.Helper()
 	contentPath := t.TempDir()
 	store, err := local.NewStore(contentPath)
@@ -82,7 +83,7 @@ func (f *namespaceFixture) addContent(t *testing.T, ns string, data []byte, medi
 
 func TestContainerdNamespaceImages(t *testing.T) {
 	t.Parallel()
-	f := newNamespaceFixture(t, "k8s.io,default")
+	f := newNamespaceFixture(t, []string{"k8s.io", "default"})
 	ctx := context.Background()
 	shared := digest.FromString("shared")
 	k8sDigest := digest.FromString("k8s")
@@ -109,7 +110,7 @@ func TestContainerdNamespaceImages(t *testing.T) {
 	resolved, err = f.client.Resolve(ctx, "example.com/conflict:v1")
 	require.NoError(t, err)
 	require.Equal(t, k8sDigest, resolved)
-	defaultFirst, err := NewContainerd(ctx, "", "default,k8s.io", mustURLs(t, "https://example.com"))
+	defaultFirst, err := NewContainerd(ctx, "", []string{"default", "k8s.io"}, mustURLs(t, "https://example.com"))
 	require.NoError(t, err)
 	defaultFirst.client = f.client.client
 	resolved, err = defaultFirst.Resolve(ctx, "example.com/conflict:v1")
@@ -131,7 +132,7 @@ func TestContainerdNamespaceImages(t *testing.T) {
 
 func TestContainerdNamespaceContent(t *testing.T) {
 	t.Parallel()
-	f := newNamespaceFixture(t, "k8s.io,default")
+	f := newNamespaceFixture(t, []string{"k8s.io", "default"})
 	ctx := context.Background()
 	configBytes := []byte(`{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}`)
 	layerBytes := []byte("layer held only in default")
@@ -208,8 +209,8 @@ func TestContainerdNamespaceContent(t *testing.T) {
 
 func TestContainerdNamespaceEvents(t *testing.T) {
 	t.Parallel()
-	for _, selected := range []string{"k8s.io", "k8s.io,default"} {
-		t.Run(selected, func(t *testing.T) {
+	for _, selected := range [][]string{{"k8s.io"}, {"k8s.io", "default"}} {
+		t.Run(strings.Join(selected, ","), func(t *testing.T) {
 			f := newNamespaceFixture(t, selected)
 			ctx, cancel := context.WithCancel(context.Background())
 			t.Cleanup(cancel)
@@ -238,7 +239,7 @@ func TestContainerdNamespaceEvents(t *testing.T) {
 			publish("excluded", "/images/create", &eventtypes.ImageCreate{Name: "example.com/ignored:v1"})
 			publish("k8s.io", "/images/create", &eventtypes.ImageCreate{Name: "other.example.com/ignored:v1"})
 			publish("k8s.io", "/containers/create", &eventtypes.ContainerCreate{})
-			if selected == "k8s.io" {
+			if len(selected) == 1 {
 				publish("default", "/images/create", &eventtypes.ImageCreate{Name: "example.com/ignored:v1"})
 			}
 			k8sDigest := digest.FromString("k8s image")
@@ -248,7 +249,7 @@ func TestContainerdNamespaceEvents(t *testing.T) {
 			require.Equal(t, "k8s.io", event.Namespace)
 			require.Equal(t, k8sDigest, event.Image.Digest)
 
-			if selected != "k8s.io" {
+			if len(selected) > 1 {
 				name := "example.com/nodemanager:latest"
 				defaultDigest := digest.FromString("default image")
 				f.addImage(t, "default", name, defaultDigest)
@@ -312,7 +313,7 @@ func TestNamespaceLookupPreservesErrors(t *testing.T) {
 
 func TestContainerdConcurrentClientInitialization(t *testing.T) {
 	t.Parallel()
-	f := newNamespaceFixture(t, "k8s.io,default")
+	f := newNamespaceFixture(t, []string{"k8s.io", "default"})
 	var calls int
 	c := &Containerd{clientGetter: func() (*containerd.Client, error) {
 		calls++

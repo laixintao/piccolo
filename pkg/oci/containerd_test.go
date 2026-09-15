@@ -14,7 +14,7 @@ func TestNewContainerd(t *testing.T) {
 	t.Parallel()
 
 	registries := mustURLs(t, "https://docker.io", "https://ghcr.io")
-	c, err := NewContainerd(context.Background(), "socket", "namespace", registries)
+	c, err := NewContainerd(context.Background(), "socket", []string{"namespace"}, registries)
 	require.NoError(t, err)
 	require.Empty(t, c.contentPath)
 	require.Nil(t, c.client)
@@ -23,7 +23,7 @@ func TestNewContainerd(t *testing.T) {
 	c, err = NewContainerd(
 		context.Background(),
 		"socket",
-		"namespace",
+		[]string{"namespace"},
 		registries,
 		WithContentPath("local"),
 	)
@@ -34,19 +34,21 @@ func TestNewContainerd(t *testing.T) {
 func TestContainerdNamespaceConfiguration(t *testing.T) {
 	t.Parallel()
 	for _, tt := range []struct {
-		value string
+		name  string
+		value []string
 		want  []string
 	}{
-		{value: "k8s.io", want: []string{"k8s.io"}},
-		{value: "k8s.io,default", want: []string{"k8s.io", "default"}},
-		{value: " default, k8s.io,default ", want: []string{"default", "k8s.io"}},
-		{value: ""},
-		{value: "k8s.io,"},
-		{value: ",default"},
-		{value: "k8s.io,,default"},
-		{value: "k8s.io,invalid/namespace"},
+		{name: "single", value: []string{"k8s.io"}, want: []string{"k8s.io"}},
+		{name: "multiple", value: []string{"k8s.io", "default"}, want: []string{"k8s.io", "default"}},
+		{name: "trim and deduplicate", value: []string{" default ", "k8s.io", "default"}, want: []string{"default", "k8s.io"}},
+		{name: "nil list"},
+		{name: "empty list", value: []string{}},
+		{name: "empty value", value: []string{""}},
+		{name: "empty entry", value: []string{"k8s.io", ""}},
+		{name: "comma is not a list separator", value: []string{"k8s.io,default"}},
+		{name: "invalid entry", value: []string{"k8s.io", "invalid/namespace"}},
 	} {
-		t.Run(tt.value, func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			c, err := NewContainerd(context.Background(), "socket", tt.value, mustURLs(t, "https://example.com"))
 			if tt.want == nil {
 				require.ErrorContains(t, err, "invalid containerd namespace")

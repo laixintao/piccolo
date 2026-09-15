@@ -37,7 +37,7 @@ type Arguments struct {
 	MetricsAddr  string `arg:"--metrics-listen-addr,required,env:METRICS_ADDR" help:"address to serve metrics."`
 
 	ContainerdSock              string        `arg:"--containerd-sock,env:CONTAINERD_SOCK" default:"/run/containerd/containerd.sock" help:"Endpoint of containerd service."`
-	ContainerdNamespace         string        `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" default:"k8s.io" help:"Comma-separated containerd namespaces to fetch images from, in tag lookup priority order."`
+	ContainerdNamespaces        []string      `arg:"--containerd-namespace,env:CONTAINERD_NAMESPACE" help:"Containerd namespaces to fetch images from, in tag lookup priority order."`
 	ContainerdContentPath       string        `arg:"--containerd-content-path,env:CONTAINERD_CONTENT_PATH" default:"/var/lib/containerd/io.containerd.content.v1.content" help:"Path to Containerd content store"`
 	Registries                  []url.URL     `arg:"--registries,env:REGISTRIES,required" help:"registries that are configured to be mirrored."`
 	LogLevel                    slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
@@ -61,6 +61,12 @@ func (a Arguments) validate() error {
 	return nil
 }
 
+func newArguments() *Arguments {
+	// go-arg does not support default tags on slices; initialize the list so
+	// its normal CLI/env precedence and help output still apply.
+	return &Arguments{ContainerdNamespaces: []string{"k8s.io"}}
+}
+
 func main() {
 	for _, a := range os.Args[1:] {
 		if a == "--version" || a == "-v" {
@@ -69,7 +75,7 @@ func main() {
 		}
 	}
 
-	args := &Arguments{}
+	args := newArguments()
 	parser := arg.MustParse(args)
 	if err := args.validate(); err != nil {
 		parser.Fail(err.Error())
@@ -86,7 +92,7 @@ func main() {
 	controlLog := log.WithValues("component", logging.Piccolo)
 	controlLog.Info("pi starting", "event", "startup", "subsystem", "lifecycle", "version", version, "group", args.Group)
 	ctx := logr.NewContext(context.Background(), log)
-	ociClient, err := oci.NewContainerd(logr.NewContext(ctx, controlLog.WithValues("subsystem", "containerd")), args.ContainerdSock, args.ContainerdNamespace, args.Registries, oci.WithContentPath(args.ContainerdContentPath))
+	ociClient, err := oci.NewContainerd(logr.NewContext(ctx, controlLog.WithValues("subsystem", "containerd")), args.ContainerdSock, args.ContainerdNamespaces, args.Registries, oci.WithContentPath(args.ContainerdContentPath))
 	if err != nil {
 		controlLog.Error(err, "containerd client initialization failed", "event", "startup_failed", "subsystem", "containerd")
 		os.Exit(1)

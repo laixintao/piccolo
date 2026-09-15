@@ -4,16 +4,20 @@ Pi defaults to the `k8s.io` namespace. To discover and serve images from both
 Kubernetes and workloads using `default`, set:
 
 ```sh
---containerd-namespace=k8s.io,default
+--containerd-namespace k8s.io default
 ```
 
-The same setting is available through the environment:
+Like `--registries`, this flag accepts a list of space-separated arguments.
+The environment variable uses go-arg's comma-separated list format, like
+`REGISTRIES`:
 
 ```sh
 CONTAINERD_NAMESPACE=k8s.io,default
 ```
 
 The existing single-namespace argument and environment variable remain valid.
+For multiple namespaces on the command line, pass separate values rather than
+`--containerd-namespace=k8s.io,default`.
 Whitespace around names is ignored, duplicates are removed, and empty or invalid
 namespace names are rejected at startup. Namespaces must be listed explicitly.
 

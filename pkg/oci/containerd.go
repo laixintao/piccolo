@@ -53,8 +53,8 @@ func WithContentPath(path string) Option {
 	}
 }
 
-func NewContainerd(ctx context.Context, sock, namespace string, registries []url.URL, opts ...Option) (*Containerd, error) {
-	namespaceList, err := parseNamespaces(namespace)
+func NewContainerd(ctx context.Context, sock string, namespaceNames []string, registries []url.URL, opts ...Option) (*Containerd, error) {
+	namespaceList, err := normalizeNamespaces(namespaceNames)
 	if err != nil {
 		return nil, err
 	}
@@ -92,9 +92,12 @@ func (c *Containerd) Client() (*containerd.Client, error) {
 	return c.client, err
 }
 
-func parseNamespaces(value string) ([]string, error) {
+func normalizeNamespaces(values []string) ([]string, error) {
+	if len(values) == 0 {
+		return nil, errors.New("invalid containerd namespaces: at least one namespace is required")
+	}
 	var result []string
-	for _, ns := range strings.Split(value, ",") {
+	for _, ns := range values {
 		ns = strings.TrimSpace(ns)
 		if err := identifiers.Validate(ns); err != nil {
 			return nil, fmt.Errorf("invalid containerd namespace %q: %w", ns, err)
