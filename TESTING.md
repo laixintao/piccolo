@@ -20,3 +20,6 @@ the **Go tests / Test** check on each PR.
 
 The scripts in `test_scripts/` exercise a running deployment and are not part
 of this self-contained Go test suite.
+
+See the [PR #18 Vagrant report](test_scripts/reports/2026-09-15-pr18-vagrant.md)
+for three-machine results, fixes, and remaining checks after host suspension.

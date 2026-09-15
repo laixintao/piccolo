@@ -61,3 +61,19 @@ func TestParsePathComponentsMissingRegistry(t *testing.T) {
 	_, err := parsePathComponents("", "/v2/spegel-org/spegel/manifests/v0.0.1")
 	require.EqualError(t, err, "registry parameter needs to be set for tag references")
 }
+
+func TestLatestTagWithRegistryPort(t *testing.T) {
+	t.Parallel()
+	for _, registry := range []string{"harbor.example.com", "localhost:5000", "[::1]:5000"} {
+		for _, tag := range []string{"latest", "v1", "latest-build"} {
+			t.Run(registry+"/"+tag, func(t *testing.T) {
+				ref, err := parsePathComponents(registry, "/v2/org/image/manifests/"+tag)
+				require.NoError(t, err)
+				require.Equal(t, tag == "latest", ref.hasLatestTag())
+			})
+		}
+	}
+	ref, err := parsePathComponents("localhost:5000", "/v2/org/image/manifests/"+digest.FromString("image").String())
+	require.NoError(t, err)
+	require.False(t, ref.hasLatestTag())
+}

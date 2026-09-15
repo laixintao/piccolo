@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -120,6 +121,10 @@ func (r *PiServer) handle(rw mux.ResponseWriter, req *http.Request) {
 		if contentRange := rw.Header().Get("Content-Range"); contentRange != "" {
 			kvs = append(kvs, "content_range", contentRange)
 		}
+		if rw.Status() == http.StatusNotFound && errors.Is(rw.Error(), oci.ErrNotFound) {
+			log.Info("peer content not found", append(kvs, "result", "miss")...)
+			return
+		}
 		if rw.Error() == nil && rw.Status() < 500 {
 			log.Info("peer request finished", kvs...)
 			return
@@ -227,7 +232,7 @@ func (r *PiServer) handleManifest(rw mux.ResponseWriter, req *http.Request, ref 
 func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref reference) {
 	size, err := r.ociClient.Size(req.Context(), ref.dgst)
 	if err != nil {
-		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("could not determine size of blob with digest %s: %w", ref.dgst.String(), err))
+		writeBlobError(rw, fmt.Errorf("could not determine size of blob with digest %s: %w", ref.dgst.String(), err))
 		return
 	}
 	rw.Header().Set("Accept-Ranges", "bytes")
@@ -240,7 +245,7 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 
 	rc, err := r.ociClient.GetBlob(req.Context(), ref.dgst)
 	if err != nil {
-		rw.WriteError(http.StatusInternalServerError, fmt.Errorf("could not get reader for blob with digest %s: %w", ref.dgst.String(), err))
+		writeBlobError(rw, fmt.Errorf("could not get reader for blob with digest %s: %w", ref.dgst.String(), err))
 		return
 	}
 	defer rc.Close()
@@ -251,6 +256,17 @@ func (r *PiServer) handleBlob(rw mux.ResponseWriter, req *http.Request, ref refe
 	}
 
 	http.ServeContent(rw, req, "", time.Time{}, limitedRC)
+}
+
+func writeBlobError(rw mux.ResponseWriter, err error) {
+	status := http.StatusInternalServerError
+	if errors.Is(err, oci.ErrNotFound) {
+		status = http.StatusNotFound
+	}
+	// Content can disappear between Size and GetBlob. An empty error response
+	// must not retain the size of the original blob.
+	rw.Header().Del("Content-Length")
+	rw.WriteError(status, err)
 }
 
 func isPlatformManifest(mediaType string) bool {

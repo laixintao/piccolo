@@ -67,7 +67,7 @@ func TestOCIClient(t *testing.T) {
 		require.NoError(t, err)
 	}
 	for k, v := range blobs {
-		writer, err := contentStore.Writer(ctx, content.WithRef(k.String()))
+		writer, err := contentStore.Writer(ctx, content.WithRef(contentPath+":"+k.String()))
 		require.NoError(t, err)
 		_, err = writer.Write(v)
 		require.NoError(t, err)
