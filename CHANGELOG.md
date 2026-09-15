@@ -2,9 +2,12 @@
 
 Highlights from tagged snapshots and commit history; early patch releases are grouped.
 
-## Unreleased
+## v0.2.2 — 2026-09-15
 
-- Prevent Pi self-downloads by excluding the requester IP, across all ports, from `findkey` results before peer selection and count limiting. Return 404 when only the requester holds the key.
+- Prevent Pi self-downloads by excluding the requester IP, across all ports, from Piccolo's `findkey` results before peer selection and count limiting.
+- Return 404 when only the requester holds the key, and log the requester IP and excluded holder count.
+
+Upgrade the Piccolo server to enable this fix; existing Pis already send the required `request_host` parameter.
 
 ## v0.2.1 — 2026-09-15
 
