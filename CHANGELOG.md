@@ -2,6 +2,10 @@
 
 Highlights from tagged snapshots and commit history; early patch releases are grouped.
 
+## Unreleased
+
+- Prevent Pi self-downloads by excluding the requester IP, across all ports, from `findkey` results before peer selection and count limiting. Return 404 when only the requester holds the key.
+
 ## v0.2.1 — 2026-09-15
 
 - Support multiple containerd namespaces for image discovery, sync, and serving.

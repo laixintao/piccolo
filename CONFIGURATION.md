@@ -37,6 +37,18 @@ namespace names are rejected at startup. Namespaces must be listed explicitly.
   Its manifest and blob digest keys are still advertised when image tracking and
   traversal succeed.
 
+# Peer discovery
+
+Pi sends the IP from `--pi-listen-addr` as `request_host` when calling Piccolo's
+`GET /api/v1/distribution/findkey` endpoint. The API excludes all holders with
+that IP, including holders using a different port, before prioritizing the
+nearest remaining IPv4 holder and applying `count`.
+
+If only the requester's IP holds the key, the API returns HTTP 404 and Pi treats
+the lookup as a miss. Requests without `request_host` retain the existing
+behavior and do not exclude any IP. This change takes effect when the Piccolo
+server is updated; existing Pis already send `request_host`.
+
 # Logging
 
 Pi uses three `component` values to identify the work being done:

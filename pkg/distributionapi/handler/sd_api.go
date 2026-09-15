@@ -84,8 +84,8 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 	})
 }
 
-// FindKey finds holders for a key
-// GET /api/v1/distribution/findkey?key=xxx&count=10&group=xxx
+// FindKey finds holders for a key, excluding the request_host IP when supplied.
+// GET /api/v1/distribution/findkey?key=xxx&count=10&group=xxx&request_host=10.0.0.1
 func (h *DistributionHandler) FindKey(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 2*time.Second)
 	defer cancel()
@@ -124,13 +124,12 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	// Pick the closest holder by IP, shuffle the rest randomly
+	// Exclude the requester before prioritizing peers and applying the count limit.
 	sorted := holders
 	start := time.Now()
-	sortDuration := time.Since(start).Seconds()
 
 	if req.RequestHost != "" {
-		sorted, err = closestFirstThenShuffle(holders, req.RequestHost)
+		sorted, err = excludeRequesterAndPrioritize(holders, req.RequestHost)
 		if err != nil {
 			c.JSON(http.StatusNotFound,
 				gin.H{"message": "error when sort holder's order", "err": err.Error()},
@@ -138,8 +137,17 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 			return
 		}
 	}
+	sortDuration := time.Since(start).Seconds()
 
-	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "queryed_from_db", len(holders), "sort_cost_seconds", sortDuration)
+	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "request_host", req.RequestHost,
+		"queryed_from_db", len(holders), "excluded_self_count", len(holders)-len(sorted), "sort_cost_seconds", sortDuration)
+
+	if len(sorted) == 0 {
+		c.JSON(http.StatusNotFound,
+			gin.H{"message": fmt.Sprintf("Didn't find another holder for key %s in piccolo", req.Key)},
+		)
+		return
+	}
 
 	// Get limited holders if count is specified
 	limit := 100
@@ -290,9 +298,9 @@ func lcpBits4(a, b netip.Addr) int {
 	return lcp
 }
 
-// closestFirstThenShuffle finds the holder with the longest common prefix (most
-// similar IPv4 address) and moves it to position 0. The rest remain as-is.
-func closestFirstThenShuffle(hostports []string, target string) ([]string, error) {
+// excludeRequesterAndPrioritize removes every holder on the target IP, regardless
+// of port, and moves the closest remaining IPv4 holder to position 0.
+func excludeRequesterAndPrioritize(hostports []string, target string) ([]string, error) {
 	t, err := netip.ParseAddr(target)
 	if err != nil {
 		return nil, fmt.Errorf("parse target %q: %w", target, err)
@@ -306,9 +314,10 @@ func closestFirstThenShuffle(hostports []string, target string) ([]string, error
 		return hostports, nil
 	}
 
+	peers := make([]string, 0, len(hostports))
 	bestIdx := 0
 	bestLCP := -1
-	for i, hp := range hostports {
+	for _, hp := range hostports {
 		ap, err := netip.ParseAddrPort(hp)
 		if err != nil {
 			return nil, fmt.Errorf("parse %q: %w", hp, err)
@@ -317,15 +326,21 @@ func closestFirstThenShuffle(hostports []string, target string) ([]string, error
 		if !ip.Is4() {
 			return nil, fmt.Errorf("%q is not IPv4", hp)
 		}
+		if ip == t {
+			continue
+		}
 		lcp := lcpBits4(ip, t)
 		if lcp > bestLCP {
 			bestLCP = lcp
-			bestIdx = i
+			bestIdx = len(peers)
 		}
+		peers = append(peers, hp)
 	}
 
-	hostports[0], hostports[bestIdx] = hostports[bestIdx], hostports[0]
-	return hostports, nil
+	if len(peers) > 0 {
+		peers[0], peers[bestIdx] = peers[bestIdx], peers[0]
+	}
+	return peers, nil
 }
 
 // sortByLCPv4HostPort sorts "ip:port" strings by the longest common prefix (bits)
