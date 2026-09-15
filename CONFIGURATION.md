@@ -49,6 +49,37 @@ the lookup as a miss. Requests without `request_host` retain the existing
 behavior and do not exclude any IP. This change takes effect when the Piccolo
 server is updated; existing Pis already send `request_host`.
 
+# Advertisement deduplication
+
+Pi keeps an in-memory cache of successfully advertised keys for five hours.
+Repeated image events send only keys missing from the cache or whose entries
+have expired. If every key is cached, Pi skips the HTTP request entirely. Cache
+hits do not extend the expiry, and failed advertisements remain retryable.
+The cache starts empty when Pi restarts.
+
+The cache holds at most **100,000 keys** by default. To change the positive limit:
+
+```sh
+--advertise-cache-max-keys 50000
+# Or use the environment variable:
+ADVERTISE_CACHE_MAX_KEYS=50000
+```
+
+At capacity, the least recently used key is evicted. Evicted keys can be
+advertised again before five hours pass. Expired entries are reclaimed lazily;
+the limit applies to both advertisement and full-sync cache updates.
+
+Full sync always sends the complete current key set. A successful sync refreshes
+the cache with up to the configured limit of those keys and removes entries for
+withdrawn keys, so a deleted image can be advertised again when pulled. A failed
+sync clears the cache because the server may have partially changed its records.
+Concurrent advertisements and syncs are serialized; callers can cancel while
+waiting. This behavior requires updating Pi.
+
+At DEBUG, `component=piccolo` logs `advertise_skipped`, `advertise_filtered`, and
+`advertise_cache_evicted`, including skipped or evicted key counts. The
+`key_count` on an actual advertise API request counts only the keys being sent.
+
 # Logging
 
 Pi uses three `component` values to identify the work being done:

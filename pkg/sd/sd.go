@@ -21,6 +21,7 @@ import (
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
+	"golang.org/x/sync/semaphore"
 )
 
 type ServiceDiscover interface {
@@ -37,9 +38,23 @@ type PiccoloServiceDiscover struct {
 	httpClient     *http.Client
 	piAddr         string
 	group          string
+
+	// Serialize advertisements and full syncs so the cache follows the order in
+	// which Piccolo adds or removes this holder's keys. Other API calls do not wait.
+	keyUpdates     *semaphore.Weighted
+	advertisements *advertisementCache
+	now            func() time.Time
 }
 
-func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr string, group string) (*PiccoloServiceDiscover, error) {
+type Option func(*PiccoloServiceDiscover)
+
+func WithAdvertiseCacheMaxKeys(maxKeys int) Option {
+	return func(p *PiccoloServiceDiscover) {
+		p.advertisements.maxKeys = maxKeys
+	}
+}
+
+func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr string, group string, opts ...Option) (*PiccoloServiceDiscover, error) {
 	httpClient := &http.Client{
 		Transport: &http.Transport{
 			Proxy: http.ProxyFromEnvironment,
@@ -55,26 +70,86 @@ func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr s
 			ExpectContinueTimeout: 1 * time.Second,
 		},
 	}
-	return &PiccoloServiceDiscover{
+	p := &PiccoloServiceDiscover{
 		piccoloAddress: piccoloAddress,
 		log:            log.WithValues("component", logging.Piccolo, "group", group, "pi_addr", piAddr),
 		httpClient:     httpClient,
 		piAddr:         piAddr,
 		group:          group,
-	}, nil
+		keyUpdates:     semaphore.NewWeighted(1),
+		advertisements: newAdvertisementCache(DefaultAdvertiseCacheMaxKeys),
+		now:            time.Now,
+	}
+	for _, opt := range opts {
+		opt(p)
+	}
+	if p.advertisements.maxKeys <= 0 {
+		return nil, errors.New("advertise cache max keys must be positive")
+	}
+	return p, nil
 }
 
-func (p PiccoloServiceDiscover) Ready(ctx context.Context) (bool, error) {
+func (p *PiccoloServiceDiscover) Ready(ctx context.Context) (bool, error) {
 	return true, nil
 }
 
-func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) error {
-	return p.post(ctx, "advertise", "api/v1/distribution/advertise", model.ImageAdvertiseRequest{
-		Holder: p.piAddr, Keys: keys, Group: p.group,
-	}, keys, 10*time.Second, 60*time.Second)
+func (p *PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) error {
+	if err := p.keyUpdates.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer p.keyUpdates.Release(1)
+
+	now := p.now()
+	p.advertisements.prune(now)
+	pending := make([]string, 0, len(keys))
+	seen := make(map[string]struct{}, len(keys))
+	for _, key := range keys {
+		if key == "" {
+			continue
+		}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		if p.advertisements.contains(key, now) {
+			continue
+		}
+		pending = append(pending, key)
+	}
+
+	ctx = logging.Context(ctx, p.log.WithValues("operation", "advertise"))
+	log := logr.FromContextOrDiscard(ctx)
+	if len(pending) == 0 {
+		log.V(4).Info("skipping duplicate image advertisement", "event", "advertise_skipped",
+			"input_key_count", len(keys), "skipped_key_count", len(keys), "cache_ttl", advertiseCacheTTL.String(),
+			"cache_key_count", len(p.advertisements.keys), "cache_max_keys", p.advertisements.maxKeys)
+		return nil
+	}
+	if len(pending) < len(keys) {
+		log.V(4).Info("filtered previously advertised image keys", "event", "advertise_filtered",
+			"input_key_count", len(keys), "key_count", len(pending), "skipped_key_count", len(keys)-len(pending))
+	}
+	if err := p.post(ctx, "advertise", "api/v1/distribution/advertise", model.ImageAdvertiseRequest{
+		Holder: p.piAddr, Keys: pending, Group: p.group,
+	}, pending, 10*time.Second, 60*time.Second); err != nil {
+		return err
+	}
+	// Only successful writes start the TTL; cache hits never extend it.
+	expires := p.now().Add(advertiseCacheTTL)
+	evicted := 0
+	for _, key := range pending {
+		if p.advertisements.record(key, expires) {
+			evicted++
+		}
+	}
+	if evicted > 0 {
+		log.V(4).Info("advertisement cache reached capacity", "event", "advertise_cache_evicted",
+			"evicted_key_count", evicted, "cache_key_count", len(p.advertisements.keys), "cache_max_keys", p.advertisements.maxKeys)
+	}
+	return nil
 }
 
-func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) (peers []netip.AddrPort, err error) {
+func (p *PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) (peers []netip.AddrPort, err error) {
 	u := p.piccoloAddress
 	u.Path = path.Join(u.Path, "api", "v1", "distribution", "findkey")
 	params := url.Values{}
@@ -117,19 +192,34 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	return peers, nil
 }
 
-func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
-	return p.post(ctx, "sync", "api/v1/distribution/sync", model.ImageAdvertiseRequest{
+func (p *PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
+	if err := p.keyUpdates.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer p.keyUpdates.Release(1)
+
+	// A sync is a complete snapshot. Filtering it would remove cached keys from
+	// Piccolo, and retaining keys absent from the snapshot would suppress re-adds.
+	err := p.post(ctx, "sync", "api/v1/distribution/sync", model.ImageAdvertiseRequest{
 		Holder: p.piAddr, Keys: keys, Group: p.group,
 	}, keys, 10*time.Second, 90*time.Second)
+	if err != nil {
+		// The server may have partially applied a failed sync. Let future image
+		// events advertise again instead of trusting the previous cache.
+		p.advertisements.clear()
+		return err
+	}
+	p.advertisements.replace(keys, p.now())
+	return nil
 }
 
-func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
+func (p *PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
 	return p.post(ctx, "keepalive", "api/v1/keepalive", model.KeepAliveRequest{
 		HostAddr: p.piAddr, Group: p.group,
 	}, nil, time.Second, 10*time.Second, metrics.KeepAliveTotal)
 }
 
-func (p PiccoloServiceDiscover) post(ctx context.Context, operation, endpoint string, payload any, keys []string,
+func (p *PiccoloServiceDiscover) post(ctx context.Context, operation, endpoint string, payload any, keys []string,
 	singleTimeout, totalTimeout time.Duration, counters ...*prometheus.CounterVec) (err error) {
 	u := p.piccoloAddress
 	u.Path = path.Join(u.Path, endpoint)

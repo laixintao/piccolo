@@ -8,6 +8,7 @@ import (
 
 	"github.com/alexflint/go-arg"
 	"github.com/laixintao/piccolo/pkg/oci"
+	"github.com/laixintao/piccolo/pkg/sd"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,6 +86,40 @@ func TestDefaultRefreshIntervalCanStartTicker(t *testing.T) {
 		ticker := time.NewTicker(time.Duration(args.FullRefreshMinutes) * time.Minute)
 		ticker.Stop()
 	}, "omitting an optional CLI argument must not crash the tracker")
+}
+
+func TestAdvertiseCacheLimitArguments(t *testing.T) {
+	args := parseTestArguments(t)
+	require.Equal(t, sd.DefaultAdvertiseCacheMaxKeys, args.AdvertiseCacheMaxKeys)
+	for _, limit := range []int{1, 50000, 0, -1} {
+		t.Run(strconv.Itoa(limit), func(t *testing.T) {
+			args := parseTestArguments(t, "--advertise-cache-max-keys", strconv.Itoa(limit))
+			require.Equal(t, limit, args.AdvertiseCacheMaxKeys)
+			if limit > 0 {
+				require.NoError(t, args.validate())
+			} else {
+				require.ErrorContains(t, args.validate(), "--advertise-cache-max-keys must be positive")
+			}
+		})
+	}
+}
+
+func TestAdvertiseCacheLimitEnvironment(t *testing.T) {
+	t.Setenv("ADVERTISE_CACHE_MAX_KEYS", "12345")
+	args := newArguments()
+	parser, err := arg.NewParser(arg.Config{}, args)
+	require.NoError(t, err)
+	argv := []string{
+		"--registry-listen-addr", "127.0.0.1:5123",
+		"--pi-listen-addr", "127.0.0.1:5127",
+		"--metrics-listen-addr", "127.0.0.1:9090",
+		"--registries", "http://registry.example:5000",
+		"--group", "test",
+	}
+	require.NoError(t, parser.Parse(argv))
+	require.Equal(t, 12345, args.AdvertiseCacheMaxKeys)
+	require.NoError(t, parser.Parse(append(argv, "--advertise-cache-max-keys", "50")))
+	require.Equal(t, 50, args.AdvertiseCacheMaxKeys)
 }
 
 func TestRefreshIntervalValidation(t *testing.T) {
