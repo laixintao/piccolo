@@ -87,6 +87,7 @@ func (c *fakeOCIClient) GetBlob(ctx context.Context, dgst digest.Digest) (io.Rea
 type fakeSD struct {
 	resolvedKeys []string
 	peers        []netip.AddrPort
+	resolveErr   error
 }
 
 func (s *fakeSD) Ready(ctx context.Context) (bool, error) {
@@ -95,7 +96,7 @@ func (s *fakeSD) Ready(ctx context.Context) (bool, error) {
 
 func (s *fakeSD) Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error) {
 	s.resolvedKeys = append(s.resolvedKeys, key)
-	return s.peers, nil
+	return s.peers, s.resolveErr
 }
 
 func (s *fakeSD) Advertise(ctx context.Context, keys []string) error {

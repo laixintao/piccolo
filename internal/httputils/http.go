@@ -84,7 +84,7 @@ func DoRequestWithRetry(
 		if err != nil {
 			cancelReq()
 			lastErr = err
-			log.Error(err, "http request get error", "attemp", attempt)
+			log.V(4).Info("Piccolo HTTP attempt failed", "event", "api_attempt_failed", "attempt", attempt, "error", err.Error(), "backoff", backoff.String())
 			if metrics != nil {
 				metrics.WithLabelValues("fail").Inc()
 			}
@@ -94,7 +94,7 @@ func DoRequestWithRetry(
 				resp.Body.Close()
 				cancelReq()
 				lastErr = fmt.Errorf("server error: %s", resp.Status)
-				log.Info("http request status code 5xx", "attemp", attempt, "status_code", resp.Status)
+				log.V(4).Info("Piccolo HTTP attempt returned a server error", "event", "api_attempt_failed", "attempt", attempt, "status", resp.StatusCode, "backoff", backoff.String())
 				if metrics != nil {
 					metrics.WithLabelValues("fail").Inc()
 				}

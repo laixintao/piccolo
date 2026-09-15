@@ -11,7 +11,8 @@ The Go tests use temporary directories, local OCI fixtures, and in-process
 services. They do not require a running containerd daemon, MySQL database, or
 access to an image registry. Coverage includes OCI image traversal and
 architecture selection, containerd namespace event filtering and content lookup,
-registry request handling, buffer pooling, and HTTP response tracking.
+registry request handling, log correlation between components, API retry and
+cache-miss logging, buffer pooling, and HTTP response tracking.
 
 GitHub Actions runs this command on Ubuntu for every pull request and push
 to `main`. The Go version is read from `go.mod`. Test results are available in

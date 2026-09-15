@@ -66,7 +66,7 @@ func NewContainerd(ctx context.Context, sock, namespace string, registries []url
 		eventFilters = append(eventFilters, fmt.Sprintf("namespace==%q,%s", ns, eventFilter))
 	}
 	log := logr.FromContextOrDiscard(ctx)
-	log.Info("ContainerdClient Created.", "namespaces", namespaceList, "listFilter", listFilter, "eventFilters", eventFilters)
+	log.Info("containerd client configured", "event", "containerd_configured", "namespaces", namespaceList, "listFilter", listFilter, "eventFilters", eventFilters)
 
 	c := &Containerd{
 		clientGetter: func() (*containerd.Client, error) {
@@ -156,7 +156,7 @@ func (c *Containerd) Verify(ctx context.Context) error {
 		return err
 	}
 	if constraint.Check(version) {
-		log.Info("unable to verify status response", "runtime_version", version.String())
+		log.V(4).Info("containerd status verification skipped", "event", "verification_skipped", "runtime_version", version.String())
 		return nil
 	}
 
@@ -180,11 +180,11 @@ func (c *Containerd) Subscribe(ctx context.Context) (<-chan ImageEvent, <-chan e
 		for {
 			select {
 			case <-ctx.Done():
-				log.Info("ctx done, return from subscriber")
+				log.V(4).Info("containerd subscription canceled", "event", "subscription_canceled")
 				return
 			case envelope, ok := <-envelopeCh:
 				if !ok {
-					log.Info("envelopeCh closed")
+					log.V(4).Info("containerd event stream closed", "event", "subscription_closed")
 					return
 				}
 				if !slices.Contains(c.namespaces, envelope.Namespace) {
@@ -219,7 +219,7 @@ func (c *Containerd) imageEvent(ctx context.Context, client *containerd.Client, 
 	if eventType == DeleteEvent {
 		// The image is already gone; state tracking will sync the union of all
 		// configured namespaces so content held elsewhere stays advertised.
-		logr.FromContextOrDiscard(ctx).Info("Delete image", "imageName", imageName, "namespace", envelope.Namespace)
+		logr.FromContextOrDiscard(ctx).V(4).Info("containerd image deleted", "event", "image_deleted", "image", imageName, "namespace", envelope.Namespace)
 		return event, nil
 	}
 	cImg, err := client.GetImage(namespaces.WithNamespace(ctx, envelope.Namespace), imageName)
@@ -236,7 +236,7 @@ func (c *Containerd) ListImages(ctx context.Context) ([]Image, error) {
 	if err != nil {
 		return nil, err
 	}
-	log.Info("list images with filter", "filter", c.listFilter, "namespaces", c.namespaces)
+	log.V(4).Info("listing containerd images", "event", "images_listing", "filter", c.listFilter, "namespaces", c.namespaces)
 	imgs := []Image{}
 	seen := map[Image]struct{}{}
 	for _, ns := range c.namespaces {

@@ -3,7 +3,7 @@ package sd
 import (
 	"context"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -17,6 +17,7 @@ import (
 
 	"github.com/go-logr/logr"
 	"github.com/laixintao/piccolo/internal/httputils"
+	"github.com/laixintao/piccolo/internal/logging"
 	"github.com/laixintao/piccolo/pkg/distributionapi/model"
 	"github.com/laixintao/piccolo/pkg/metrics"
 	"github.com/prometheus/client_golang/prometheus"
@@ -55,8 +56,8 @@ func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr s
 		},
 	}
 	return &PiccoloServiceDiscover{
-		piccoloAddress: *&piccoloAddress,
-		log:            log,
+		piccoloAddress: piccoloAddress,
+		log:            log.WithValues("component", logging.Piccolo, "group", group, "pi_addr", piAddr),
 		httpClient:     httpClient,
 		piAddr:         piAddr,
 		group:          group,
@@ -68,52 +69,12 @@ func (p PiccoloServiceDiscover) Ready(ctx context.Context) (bool, error) {
 }
 
 func (p PiccoloServiceDiscover) Advertise(ctx context.Context, keys []string) error {
-	log := logr.FromContextOrDiscard(ctx)
-	log.Info("Advertise keys...", "keys", keys)
-	url := p.piccoloAddress
-	url.Path = path.Join(url.Path, "api", "v1", "distribution", "advertise")
-	request := model.ImageAdvertiseRequest{
-		Holder: p.piAddr,
-		Keys:   keys,
-		Group:  p.group,
-	}
-	body, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-	resp, err := httputils.DoRequestWithRetry(ctx,
-		"POST",
-		url.String(),
-		body,
-		map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
-		10*time.Second,
-		60*time.Second,
-		p.httpClient,
-	)
-	if err != nil {
-		log.Error(err, "Advertise error")
-		return err
-	}
-	defer resp.Body.Close()
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error(err, "Failed to read response body")
-		return err
-	}
-	log.Info("Advertise done", "response", string(responseBody))
-
-	return nil
+	return p.post(ctx, "advertise", "api/v1/distribution/advertise", model.ImageAdvertiseRequest{
+		Holder: p.piAddr, Keys: keys, Group: p.group,
+	}, keys, 10*time.Second, 60*time.Second)
 }
 
-func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) ([]netip.AddrPort, error) {
-	p.log.Info("Resolve key", "key", key, "count", count)
-	deadline, _ := ctx.Deadline()
-	fmt.Printf("Enter resolve key The context left %s \n", deadline)
-	log := logr.FromContextOrDiscard(ctx)
+func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count int) (peers []netip.AddrPort, err error) {
 	u := p.piccoloAddress
 	u.Path = path.Join(u.Path, "api", "v1", "distribution", "findkey")
 	params := url.Values{}
@@ -123,122 +84,102 @@ func (p PiccoloServiceDiscover) Resolve(ctx context.Context, key string, count i
 	params.Add("request_host", strings.Split(p.piAddr, ":")[0])
 	u.RawQuery = params.Encode()
 
+	ctx = logging.Context(ctx, p.log.WithValues("operation", "findkey", "key", key, "limit", count, "server", u.Host, "path", u.Path, "method", http.MethodGet))
+	log := logr.FromContextOrDiscard(ctx)
+	start := time.Now()
+	status := 0
+	defer func() { logAPIResult(log, start, status, err, true, "peer_count", len(peers), "peers", peers) }()
+	log.V(4).Info("querying Piccolo for peers", "event", "api_request_started")
+
 	resolveTimer := prometheus.NewTimer(metrics.ResolveDurHistogram.WithLabelValues())
-	resp, err := httputils.DoRequestWithRetry(ctx,
-		"GET",
-		u.String(),
-		nil,
-		map[string]string{
-			"Accept": "application/json",
-		},
-		1*time.Second,
-		5*time.Second,
-		p.httpClient,
-	)
+	resp, err := httputils.DoRequestWithRetry(ctx, http.MethodGet, u.String(), nil,
+		map[string]string{"Accept": "application/json", logging.RequestIDHeader: logging.RequestID(ctx)},
+		time.Second, 5*time.Second, p.httpClient)
 	resolveTimer.ObserveDuration()
 	if err != nil {
-		log.Error(err, "Resolve error", "requestAddress", u.String())
 		return nil, err
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
 
-	var findkeyResp model.FindKeyResponse
-	if err := json.NewDecoder(resp.Body).Decode(&findkeyResp); err != nil {
+	var response model.FindKeyResponse
+	if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
 		return nil, err
 	}
-	var addrPorts []netip.AddrPort
-	for _, h := range findkeyResp.Holders {
-		ap, err := netip.ParseAddrPort(h)
+	for _, holder := range response.Holders {
+		peer, err := netip.ParseAddrPort(holder)
 		if err != nil {
-			log.Error(err, "Can not convert to net.AddrPort", "host", h)
+			log.Error(err, "Piccolo returned an invalid peer address", "event", "invalid_peer", "peer", holder)
 			continue
 		}
-		addrPorts = append(addrPorts, ap)
+		peers = append(peers, peer)
 	}
-	log.Info("Resolve done, find addrPorts", "addrPorts", addrPorts, "requestAddress", u.String())
-
-	return addrPorts, nil
+	return peers, nil
 }
 
 func (p PiccoloServiceDiscover) Sync(ctx context.Context, keys []string) error {
-	log := logr.FromContextOrDiscard(ctx)
-	log.Info("Sync keys...", "keys", keys)
-	url := p.piccoloAddress
-	url.Path = path.Join(url.Path, "api", "v1", "distribution", "sync")
-	request := model.ImageAdvertiseRequest{
-		Holder: p.piAddr,
-		Keys:   keys,
-		Group:  p.group,
-	}
-	body, err := json.Marshal(request)
-	if err != nil {
-		return err
-	}
-	resp, err := httputils.DoRequestWithRetry(ctx,
-		"POST",
-		url.String(),
-		body,
-		map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
-		10*time.Second,
-		90*time.Second,
-		p.httpClient,
-	)
-	if err != nil {
-		log.Error(err, "Advertise error", "requestBody", body)
-		return err
-	}
-	defer resp.Body.Close()
-
-	responseBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		log.Error(err, "Failed to read response body")
-		return err
-	}
-	log.Info("Sync done", "response", string(responseBody))
-
-	return nil
+	return p.post(ctx, "sync", "api/v1/distribution/sync", model.ImageAdvertiseRequest{
+		Holder: p.piAddr, Keys: keys, Group: p.group,
+	}, keys, 10*time.Second, 90*time.Second)
 }
 
 func (p PiccoloServiceDiscover) DoKeepAlive(ctx context.Context) error {
-	log := logr.FromContextOrDiscard(ctx)
-	url := p.piccoloAddress
-	url.Path = path.Join(url.Path, "api", "v1", "keepalive")
-	request := model.KeepAliveRequest{
-		HostAddr: p.piAddr,
-		Group: p.group,
+	return p.post(ctx, "keepalive", "api/v1/keepalive", model.KeepAliveRequest{
+		HostAddr: p.piAddr, Group: p.group,
+	}, nil, time.Second, 10*time.Second, metrics.KeepAliveTotal)
+}
+
+func (p PiccoloServiceDiscover) post(ctx context.Context, operation, endpoint string, payload any, keys []string,
+	singleTimeout, totalTimeout time.Duration, counters ...*prometheus.CounterVec) (err error) {
+	u := p.piccoloAddress
+	u.Path = path.Join(u.Path, endpoint)
+	log := p.log.WithValues("operation", operation, "server", u.Host, "path", u.Path, "method", http.MethodPost)
+	if operation != "keepalive" {
+		log = log.WithValues("key_count", len(keys))
 	}
-	body, err := json.Marshal(request)
+	ctx = logging.Context(ctx, log)
+	log = logr.FromContextOrDiscard(ctx)
+	start := time.Now()
+	status := 0
+	defer func() { logAPIResult(log, start, status, err, false) }()
+	log.V(4).Info("sending request to Piccolo", "event", "api_request_started")
+	if operation != "keepalive" {
+		log.V(4).Info("image keys prepared for Piccolo", "event", "keys_prepared", "keys", keys)
+	}
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return err
 	}
-	resp, err := httputils.DoRequestWithRetry(ctx,
-		"POST",
-		url.String(),
-		body,
-		map[string]string{
-			"Content-Type": "application/json",
-			"Accept":       "application/json",
-		},
-		1*time.Second,
-		10*time.Second,
-		p.httpClient,
-		metrics.KeepAliveTotal,
-	)
+	resp, err := httputils.DoRequestWithRetry(ctx, http.MethodPost, u.String(), body,
+		map[string]string{"Content-Type": "application/json", "Accept": "application/json", logging.RequestIDHeader: logging.RequestID(ctx)},
+		singleTimeout, totalTimeout, p.httpClient, counters...)
 	if err != nil {
-		log.Error(err, "SD Keepalive Error", "requestBody", body)
 		return err
 	}
 	defer resp.Body.Close()
+	status = resp.StatusCode
+	_, err = io.Copy(io.Discard, resp.Body)
+	return err
+}
 
-	responseBody, err := io.ReadAll(resp.Body)
+func logAPIResult(log logr.Logger, start time.Time, status int, err error, notFoundIsMiss bool, values ...any) {
+	result := "ok"
 	if err != nil {
-		log.Error(err, "Failed to read response body")
-		return err
+		result = "error"
 	}
-	log.Info("Keepalive Done", "response", string(responseBody))
-
-	return nil
+	if errors.Is(err, httputils.ErrNotFound) {
+		status = http.StatusNotFound
+		if notFoundIsMiss {
+			result = "miss"
+		}
+	}
+	values = append(values, "event", "api_request_finished", "result", result, "latency", time.Since(start).String())
+	if status != 0 {
+		values = append(values, "status", status)
+	}
+	if err != nil && result != "miss" {
+		log.Error(err, "Piccolo API request failed", values...)
+		return
+	}
+	log.Info("Piccolo API request finished", values...)
 }
