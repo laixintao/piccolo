@@ -155,19 +155,6 @@ func (c *peerCache) store(window peerWindow) {
 	c.holderCount += len(window.holders)
 }
 
-func (c *peerCache) invalidate(group string, keys ...string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, key := range keys {
-		if key == "" {
-			continue
-		}
-		if element, ok := c.entries[peerCacheKey{group, key}]; ok {
-			c.remove(element)
-		}
-	}
-}
-
 // remove requires mu to be held.
 func (c *peerCache) remove(element *list.Element) {
 	window := element.Value.(peerWindow)
