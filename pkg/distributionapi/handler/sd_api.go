@@ -173,6 +173,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		Key:     req.Key,
 		Holders: peers[:limit],
 		Group:   req.Group,
+		Total:   len(holders),
 	})
 }
 
