@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"math/rand/v2"
@@ -30,6 +31,12 @@ import (
 const testNoopDriverName = "piccolo-noop-sql"
 
 var registerTestNoopDriver sync.Once
+
+type distributionHandlerTestCallbacks struct {
+	query  func(*gorm.DB)
+	create func(*gorm.DB)
+	delete func(*gorm.DB)
+}
 
 func TestFindKeyExcludesRequesterIP(t *testing.T) {
 	for _, tt := range []struct {
@@ -142,7 +149,9 @@ func TestFindKeyExcludesRequesterIP(t *testing.T) {
 }
 
 func TestAdvertiseImageInvalidatesTouchedPeerCacheEntries(t *testing.T) {
-	handler := newDistributionHandlerForWriteTests(t, func(tx *gorm.DB) {})
+	handler := newDistributionHandlerForWriteTests(t, distributionHandlerTestCallbacks{
+		query: func(tx *gorm.DB) {},
+	})
 	group := "ap-sg-1-general-d"
 	staleKey := "sha256:stale"
 	keepKey := "sha256:keep"
@@ -177,10 +186,12 @@ func TestSyncInvalidatesAddedAndRemovedPeerCacheEntries(t *testing.T) {
 	removedKey := "sha256:removed"
 	unchangedKey := "sha256:unchanged"
 	addedKey := "sha256:added"
-	handler := newDistributionHandlerForWriteTests(t, func(tx *gorm.DB) {
-		if keys, ok := tx.Statement.Dest.(*[]string); ok {
-			*keys = []string{removedKey, unchangedKey}
-		}
+	handler := newDistributionHandlerForWriteTests(t, distributionHandlerTestCallbacks{
+		query: func(tx *gorm.DB) {
+			if keys, ok := tx.Statement.Dest.(*[]string); ok {
+				*keys = []string{removedKey, unchangedKey}
+			}
+		},
 	})
 	cacheUntil := time.Now().Add(time.Minute)
 	for _, entry := range []peerWindow{
@@ -206,15 +217,75 @@ func TestSyncInvalidatesAddedAndRemovedPeerCacheEntries(t *testing.T) {
 }
 
 func newFindKeyTestHandler(t *testing.T, holders []string) *DistributionHandler {
-	return newDistributionHandlerForWriteTests(t, func(tx *gorm.DB) {
-		result, ok := tx.Statement.Dest.(*[]string)
-		require.True(t, ok)
-		*result = append([]string(nil), holders...)
-		tx.RowsAffected = int64(len(holders))
+	return newDistributionHandlerForWriteTests(t, distributionHandlerTestCallbacks{
+		query: func(tx *gorm.DB) {
+			result, ok := tx.Statement.Dest.(*[]string)
+			require.True(t, ok)
+			*result = append([]string(nil), holders...)
+			tx.RowsAffected = int64(len(holders))
+		},
 	})
 }
 
-func newDistributionHandlerForWriteTests(t *testing.T, query func(*gorm.DB)) *DistributionHandler {
+func TestAdvertiseImageKeepsCacheOnCreateError(t *testing.T) {
+	writeErr := errors.New("insert failed")
+	handler := newDistributionHandlerForWriteTests(t, distributionHandlerTestCallbacks{
+		create: func(tx *gorm.DB) { tx.AddError(writeErr) },
+	})
+	group := "ap-sg-1-general-d"
+	staleKey := "sha256:stale"
+	cacheUntil := time.Now().Add(time.Minute)
+	handler.peers.store(peerWindow{
+		key:       peerCacheKey{group, staleKey},
+		holders:   []string{"stale:5127"},
+		refreshAt: cacheUntil,
+	})
+
+	body := `{"holder":"10.0.0.1:5127","group":"` + group + `","keys":["` + staleKey + `"]}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/distribution/advertise", bytes.NewBufferString(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.AdvertiseImage(ctx)
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+	require.Contains(t, handler.peers.entries, peerCacheKey{group, staleKey})
+}
+
+func TestSyncKeepsCacheOnDeleteError(t *testing.T) {
+	writeErr := errors.New("delete failed")
+	group := "ap-sg-1-general-d"
+	holder := "10.0.0.1:5127"
+	removedKey := "sha256:removed"
+	handler := newDistributionHandlerForWriteTests(t, distributionHandlerTestCallbacks{
+		query: func(tx *gorm.DB) {
+			if keys, ok := tx.Statement.Dest.(*[]string); ok {
+				*keys = []string{removedKey}
+			}
+		},
+		delete: func(tx *gorm.DB) { tx.AddError(writeErr) },
+	})
+	cacheUntil := time.Now().Add(time.Minute)
+	handler.peers.store(peerWindow{
+		key:       peerCacheKey{group, removedKey},
+		holders:   []string{"removed:5127"},
+		refreshAt: cacheUntil,
+	})
+
+	body := `{"holder":"` + holder + `","group":"` + group + `","keys":[]}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/distribution/sync", bytes.NewBufferString(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.Sync(ctx)
+
+	require.Equal(t, http.StatusInternalServerError, recorder.Code, recorder.Body.String())
+	require.Contains(t, handler.peers.entries, peerCacheKey{group, removedKey})
+}
+
+func newDistributionHandlerForWriteTests(t *testing.T, callbacks distributionHandlerTestCallbacks) *DistributionHandler {
 	t.Helper()
 	db, err := gorm.Open(mysql.New(mysql.Config{
 		Conn:                      newNoopSQLDB(t),
@@ -223,7 +294,16 @@ func newDistributionHandlerForWriteTests(t *testing.T, query func(*gorm.DB)) *Di
 		DisableAutomaticPing: true, Logger: logger.Default.LogMode(logger.Silent),
 	})
 	require.NoError(t, err)
-	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:holders", query))
+	if callbacks.query == nil {
+		callbacks.query = func(*gorm.DB) {}
+	}
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:holders", callbacks.query))
+	if callbacks.create != nil {
+		require.NoError(t, db.Callback().Create().Before("gorm:create").Register("test:create", callbacks.create))
+	}
+	if callbacks.delete != nil {
+		require.NoError(t, db.Callback().Delete().Before("gorm:delete").Register("test:delete", callbacks.delete))
+	}
 	handler, err := NewDistributionHandler(storage.NewManager(db, nil, nil), logr.Discard(), DefaultPeerCacheConfig())
 	require.NoError(t, err)
 	handler.randomIntN = rand.New(rand.NewPCG(1, 2)).IntN
