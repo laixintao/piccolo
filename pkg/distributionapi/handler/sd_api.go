@@ -82,6 +82,7 @@ func (h *DistributionHandler) AdvertiseImage(c *gin.Context) {
 		return
 	}
 
+	h.peers.invalidate(req.Group, req.Keys...)
 	h.log.Info("distributions created successfully", "holder", req.Holder, "count", len(distributions))
 	c.JSON(http.StatusCreated, model.ImageAdvertiseResponse{
 		Success: true,
@@ -204,6 +205,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 			Success: false,
 			Message: "Error when delete keys from DB",
 		})
+		return
 	}
 
 	currentKeys := req.Keys
@@ -218,6 +220,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 			})
 			return
 		}
+		h.peers.invalidate(req.Group, onlyInDB...)
 	}
 
 	if len(onlyInRequest) != 0 {
@@ -241,6 +244,7 @@ func (h *DistributionHandler) Sync(c *gin.Context) {
 			})
 			return
 		}
+		h.peers.invalidate(req.Group, onlyInRequest...)
 	}
 
 	duration := time.Since(start).Seconds()

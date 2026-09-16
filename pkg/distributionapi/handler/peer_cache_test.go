@@ -110,6 +110,34 @@ func TestPeerCacheEnforcesKeyAndTotalHolderBudgets(t *testing.T) {
 	}
 }
 
+func TestPeerCacheInvalidateRemovesOnlyTouchedKeys(t *testing.T) {
+	cache, _ := testPeerCache(t, DefaultPeerCacheConfig(), func(context.Context, string, string, string, int) ([]string, error) {
+		return nil, nil
+	})
+	cache.store(peerWindow{
+		key:       peerCacheKey{"group", "stale"},
+		holders:   []string{"a", "b"},
+		refreshAt: time.Now().Add(time.Minute),
+	})
+	cache.store(peerWindow{
+		key:       peerCacheKey{"group", "fresh"},
+		holders:   []string{"c"},
+		refreshAt: time.Now().Add(time.Minute),
+	})
+	cache.store(peerWindow{
+		key:       peerCacheKey{"other", "stale"},
+		holders:   []string{"d"},
+		refreshAt: time.Now().Add(time.Minute),
+	})
+
+	cache.invalidate("group", "stale", "missing", "")
+
+	require.NotContains(t, cache.entries, peerCacheKey{"group", "stale"})
+	require.Contains(t, cache.entries, peerCacheKey{"group", "fresh"})
+	require.Contains(t, cache.entries, peerCacheKey{"other", "stale"})
+	require.Equal(t, 2, cache.holderCount)
+}
+
 func TestPeerCacheErrorsKeepCursorAndMissesAreNotCached(t *testing.T) {
 	var calls int
 	var cursors []string

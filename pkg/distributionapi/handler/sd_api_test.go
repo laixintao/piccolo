@@ -1,14 +1,21 @@
 package handler
 
 import (
+	"bytes"
+	"context"
+	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"fmt"
+	"io"
 	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"strconv"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/go-logr/logr"
@@ -19,6 +26,10 @@ import (
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
+
+const testNoopDriverName = "piccolo-noop-sql"
+
+var registerTestNoopDriver sync.Once
 
 func TestFindKeyExcludesRequesterIP(t *testing.T) {
 	for _, tt := range []struct {
@@ -130,28 +141,155 @@ func TestFindKeyExcludesRequesterIP(t *testing.T) {
 	}
 }
 
-func newFindKeyTestHandler(t *testing.T, holders []string) *DistributionHandler {
-	t.Helper()
-	// Exercise the real handler and storage query without a MySQL service. DryRun
-	// prevents SQL execution; this callback supplies the query result only.
-	db, err := gorm.Open(mysql.New(mysql.Config{SkipInitializeWithVersion: true}), &gorm.Config{
-		DryRun: true, DisableAutomaticPing: true, Logger: logger.Default.LogMode(logger.Silent),
+func TestAdvertiseImageInvalidatesTouchedPeerCacheEntries(t *testing.T) {
+	handler := newDistributionHandlerForWriteTests(t, func(tx *gorm.DB) {})
+	group := "ap-sg-1-general-d"
+	staleKey := "sha256:stale"
+	keepKey := "sha256:keep"
+	cacheUntil := time.Now().Add(time.Minute)
+	handler.peers.store(peerWindow{
+		key:       peerCacheKey{group, staleKey},
+		holders:   []string{"stale:5127"},
+		refreshAt: cacheUntil,
 	})
-	require.NoError(t, err)
-	sqlDB, err := db.DB()
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, sqlDB.Close()) })
-	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:holders", func(tx *gorm.DB) {
+	handler.peers.store(peerWindow{
+		key:       peerCacheKey{group, keepKey},
+		holders:   []string{"keep:5127"},
+		refreshAt: cacheUntil,
+	})
+
+	body := `{"holder":"10.0.0.1:5127","group":"` + group + `","keys":["` + staleKey + `","", "` + staleKey + `"]}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/distribution/advertise", bytes.NewBufferString(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.AdvertiseImage(ctx)
+
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	require.NotContains(t, handler.peers.entries, peerCacheKey{group, staleKey})
+	require.Contains(t, handler.peers.entries, peerCacheKey{group, keepKey})
+}
+
+func TestSyncInvalidatesAddedAndRemovedPeerCacheEntries(t *testing.T) {
+	group := "ap-sg-1-general-d"
+	holder := "10.0.0.1:5127"
+	removedKey := "sha256:removed"
+	unchangedKey := "sha256:unchanged"
+	addedKey := "sha256:added"
+	handler := newDistributionHandlerForWriteTests(t, func(tx *gorm.DB) {
+		if keys, ok := tx.Statement.Dest.(*[]string); ok {
+			*keys = []string{removedKey, unchangedKey}
+		}
+	})
+	cacheUntil := time.Now().Add(time.Minute)
+	for _, entry := range []peerWindow{
+		{key: peerCacheKey{group, removedKey}, holders: []string{"removed:5127"}, refreshAt: cacheUntil},
+		{key: peerCacheKey{group, unchangedKey}, holders: []string{"unchanged:5127"}, refreshAt: cacheUntil},
+		{key: peerCacheKey{group, addedKey}, holders: []string{"added:5127"}, refreshAt: cacheUntil},
+	} {
+		handler.peers.store(entry)
+	}
+
+	body := `{"holder":"` + holder + `","group":"` + group + `","keys":["` + unchangedKey + `","` + addedKey + `"]}`
+	recorder := httptest.NewRecorder()
+	ctx, _ := gin.CreateTestContext(recorder)
+	ctx.Request = httptest.NewRequest(http.MethodPost, "/api/v1/distribution/sync", bytes.NewBufferString(body))
+	ctx.Request.Header.Set("Content-Type", "application/json")
+
+	handler.Sync(ctx)
+
+	require.Equal(t, http.StatusCreated, recorder.Code, recorder.Body.String())
+	require.NotContains(t, handler.peers.entries, peerCacheKey{group, removedKey})
+	require.Contains(t, handler.peers.entries, peerCacheKey{group, unchangedKey})
+	require.NotContains(t, handler.peers.entries, peerCacheKey{group, addedKey})
+}
+
+func newFindKeyTestHandler(t *testing.T, holders []string) *DistributionHandler {
+	return newDistributionHandlerForWriteTests(t, func(tx *gorm.DB) {
 		result, ok := tx.Statement.Dest.(*[]string)
 		require.True(t, ok)
 		*result = append([]string(nil), holders...)
 		tx.RowsAffected = int64(len(holders))
-	}))
+	})
+}
+
+func newDistributionHandlerForWriteTests(t *testing.T, query func(*gorm.DB)) *DistributionHandler {
+	t.Helper()
+	db, err := gorm.Open(mysql.New(mysql.Config{
+		Conn:                      newNoopSQLDB(t),
+		SkipInitializeWithVersion: true,
+	}), &gorm.Config{
+		DisableAutomaticPing: true, Logger: logger.Default.LogMode(logger.Silent),
+	})
+	require.NoError(t, err)
+	require.NoError(t, db.Callback().Query().After("gorm:query").Register("test:holders", query))
 	handler, err := NewDistributionHandler(storage.NewManager(db, nil, nil), logr.Discard(), DefaultPeerCacheConfig())
 	require.NoError(t, err)
 	handler.randomIntN = rand.New(rand.NewPCG(1, 2)).IntN
 	return handler
 }
+
+func newNoopSQLDB(t *testing.T) *sql.DB {
+	t.Helper()
+	registerTestNoopDriver.Do(func() { sql.Register(testNoopDriverName, noopDriver{}) })
+	db, err := sql.Open(testNoopDriverName, "")
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	return db
+}
+
+type noopDriver struct{}
+
+func (noopDriver) Open(string) (driver.Conn, error) { return noopConn{}, nil }
+
+type noopConn struct{}
+
+func (noopConn) Prepare(string) (driver.Stmt, error) { return noopStmt{}, nil }
+func (noopConn) Close() error                        { return nil }
+func (noopConn) Begin() (driver.Tx, error)           { return noopTx{}, nil }
+func (noopConn) PrepareContext(context.Context, string) (driver.Stmt, error) {
+	return noopStmt{}, nil
+}
+func (noopConn) BeginTx(context.Context, driver.TxOptions) (driver.Tx, error) {
+	return noopTx{}, nil
+}
+func (noopConn) ExecContext(context.Context, string, []driver.NamedValue) (driver.Result, error) {
+	return noopResult(0), nil
+}
+func (noopConn) QueryContext(context.Context, string, []driver.NamedValue) (driver.Rows, error) {
+	return noopRows{}, nil
+}
+func (noopConn) CheckNamedValue(*driver.NamedValue) error { return nil }
+
+type noopStmt struct{}
+
+func (noopStmt) Close() error                               { return nil }
+func (noopStmt) NumInput() int                              { return -1 }
+func (noopStmt) Exec([]driver.Value) (driver.Result, error) { return noopResult(0), nil }
+func (noopStmt) Query([]driver.Value) (driver.Rows, error)  { return noopRows{}, nil }
+func (noopStmt) ExecContext(context.Context, []driver.NamedValue) (driver.Result, error) {
+	return noopResult(0), nil
+}
+func (noopStmt) QueryContext(context.Context, []driver.NamedValue) (driver.Rows, error) {
+	return noopRows{}, nil
+}
+
+type noopTx struct{}
+
+func (noopTx) Commit() error   { return nil }
+func (noopTx) Rollback() error { return nil }
+
+type noopResult int64
+
+func (r noopResult) LastInsertId() (int64, error) { return 0, nil }
+func (r noopResult) RowsAffected() (int64, error) { return int64(r), nil }
+
+type noopRows struct{}
+
+func (noopRows) Columns() []string         { return []string{"value"} }
+func (noopRows) Close() error              { return nil }
+func (noopRows) Next([]driver.Value) error { return io.EOF }
 
 func uniqueHolders(holders []string) map[string]bool {
 	unique := make(map[string]bool, len(holders))
