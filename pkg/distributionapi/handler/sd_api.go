@@ -3,9 +3,9 @@ package handler
 import (
 	"context"
 	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/netip"
-	"sort"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -16,15 +16,20 @@ import (
 )
 
 type DistributionHandler struct {
-	m   *storage.Manager
-	log logr.Logger
+	m          *storage.Manager
+	log        logr.Logger
+	peers      *peerCache
+	randomIntN func(int) int
 }
 
-func NewDistributionHandler(m *storage.Manager, log logr.Logger) *DistributionHandler {
-	return &DistributionHandler{
-		m:   m,
-		log: log,
+func NewDistributionHandler(m *storage.Manager, log logr.Logger, config PeerCacheConfig) (*DistributionHandler, error) {
+	peers, err := newPeerCache(config, m.Distribution.GetHolderWindow)
+	if err != nil {
+		return nil, err
 	}
+	return &DistributionHandler{
+		m: m, log: log, peers: peers, randomIntN: rand.IntN,
+	}, nil
 }
 
 // AdvertiseImage hanle advertise request
@@ -106,7 +111,7 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	holders, err := h.m.Distribution.GetHolderByKey(ctx, req.Group, req.Key)
+	holders, cacheResult, err := h.peers.get(ctx, req.Group, req.Key)
 	if err != nil {
 		h.log.Error(err, "failed to get holders by key", "key", req.Key)
 		c.JSON(http.StatusInternalServerError, gin.H{
@@ -124,25 +129,21 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 		return
 	}
 
-	// Exclude the requester before prioritizing peers and applying the count limit.
-	sorted := holders
+	// The cache returns a private copy: filtering and shuffling must not change
+	// the shared window or its pagination cursor.
+	peers := holders
 	start := time.Now()
 
 	if req.RequestHost != "" {
-		sorted, err = excludeRequesterAndPrioritize(holders, req.RequestHost)
+		peers, err = excludeRequester(holders, req.RequestHost)
 		if err != nil {
 			c.JSON(http.StatusNotFound,
-				gin.H{"message": "error when sort holder's order", "err": err.Error()},
+				gin.H{"message": "error when filtering holders", "err": err.Error()},
 			)
 			return
 		}
 	}
-	sortDuration := time.Since(start).Seconds()
-
-	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "request_host", req.RequestHost,
-		"queryed_from_db", len(holders), "excluded_self_count", len(holders)-len(sorted), "sort_cost_seconds", sortDuration)
-
-	if len(sorted) == 0 {
+	if len(peers) == 0 {
 		c.JSON(http.StatusNotFound,
 			gin.H{"message": fmt.Sprintf("Didn't find another holder for key %s in piccolo", req.Key)},
 		)
@@ -154,13 +155,23 @@ func (h *DistributionHandler) FindKey(c *gin.Context) {
 	if req.Count > 0 {
 		limit = req.Count
 	}
-	if limit > len(sorted) {
-		limit = len(sorted)
+	if limit > len(peers) {
+		limit = len(peers)
 	}
+	// A partial Fisher-Yates shuffle samples without replacement and randomizes
+	// the first attempt as well as the fallback peers. Do not re-sort by IP.
+	for i := 0; i < limit; i++ {
+		j := i + h.randomIntN(len(peers)-i)
+		peers[i], peers[j] = peers[j], peers[i]
+	}
+	h.log.Info("found holders for key", "group", req.Group, "key", req.Key, "request_host", req.RequestHost,
+		"candidate_count", len(holders), "excluded_self_count", len(holders)-len(peers),
+		"cache_result", cacheResult, "selection", "random", "returned_count", limit,
+		"selection_cost_seconds", time.Since(start).Seconds())
 
 	c.JSON(http.StatusOK, model.FindKeyResponse{
 		Key:     req.Key,
-		Holders: sorted[:limit],
+		Holders: peers[:limit],
 		Group:   req.Group,
 		Total:   len(holders),
 	})
@@ -274,131 +285,32 @@ func diffSets(a, b []string) (onlyA, onlyB []string) {
 	return
 }
 
-// lcpBits4 returns the number of leading equal bits between two IPv4 addrs.
-// Both a and b must be IPv4.
-func lcpBits4(a, b netip.Addr) int {
-	ba := a.As4()
-	bb := b.As4()
-
-	lcp := 0
-	for i := 0; i < 4; i++ {
-		x := ba[i] ^ bb[i]
-		if x == 0 {
-			lcp += 8
-			continue
-		}
-		// Count leading zeros in the first differing byte
-		for bit := 7; bit >= 0; bit-- {
-			if (x>>uint(bit))&1 == 0 {
-				lcp++
-			} else {
-				return lcp
-			}
-		}
-	}
-	return lcp
-}
-
-// excludeRequesterAndPrioritize removes every holder on the target IP, regardless
-// of port, and moves the closest remaining IPv4 holder to position 0.
-func excludeRequesterAndPrioritize(hostports []string, target string) ([]string, error) {
-	t, err := netip.ParseAddr(target)
+// excludeRequester removes holders on the requester IP, across all ports.
+// The input belongs to this request, so filtering can reuse its backing array.
+func excludeRequester(hostports []string, target string) ([]string, error) {
+	requester, err := netip.ParseAddr(target)
 	if err != nil {
 		return nil, fmt.Errorf("parse target %q: %w", target, err)
 	}
-	t = t.Unmap()
-	if !t.Is4() {
+	requester = requester.Unmap()
+	if !requester.Is4() {
 		return nil, fmt.Errorf("target %q is not IPv4", target)
 	}
-
-	if len(hostports) == 0 {
-		return hostports, nil
-	}
-
-	peers := make([]string, 0, len(hostports))
-	bestIdx := 0
-	bestLCP := -1
-	for _, hp := range hostports {
-		ap, err := netip.ParseAddrPort(hp)
+	peers := hostports[:0]
+	for _, holder := range hostports {
+		address, err := netip.ParseAddrPort(holder)
 		if err != nil {
-			return nil, fmt.Errorf("parse %q: %w", hp, err)
+			return nil, fmt.Errorf("parse %q: %w", holder, err)
 		}
-		ip := ap.Addr().Unmap()
+		ip := address.Addr().Unmap()
 		if !ip.Is4() {
-			return nil, fmt.Errorf("%q is not IPv4", hp)
+			return nil, fmt.Errorf("%q is not IPv4", holder)
 		}
-		if ip == t {
-			continue
+		if ip != requester {
+			peers = append(peers, holder)
 		}
-		lcp := lcpBits4(ip, t)
-		if lcp > bestLCP {
-			bestLCP = lcp
-			bestIdx = len(peers)
-		}
-		peers = append(peers, hp)
-	}
-
-	if len(peers) > 0 {
-		peers[0], peers[bestIdx] = peers[bestIdx], peers[0]
 	}
 	return peers, nil
-}
-
-// sortByLCPv4HostPort sorts "ip:port" strings by the longest common prefix (bits)
-// of their IPv4 address with the given target IPv4 address.
-// Ports are ignored for ranking, but returned strings keep the original "ip:port" form.
-func sortByLCPv4HostPort(hostports []string, target string) ([]string, error) {
-	// Parse and validate target as IPv4
-	t, err := netip.ParseAddr(target)
-	if err != nil {
-		return nil, fmt.Errorf("parse target %q: %w", target, err)
-	}
-	t = t.Unmap()
-	if !t.Is4() {
-		return nil, fmt.Errorf("target %q is not IPv4", target)
-	}
-
-	// Parse inputs and precompute LCP
-	type item struct {
-		hostport string // original "ip:port"
-		ip       netip.Addr
-		lcp      int
-	}
-
-	items := make([]item, 0, len(hostports))
-	for _, hp := range hostports {
-		ap, err := netip.ParseAddrPort(hp)
-		if err != nil {
-			return nil, fmt.Errorf("parse %q: %w", hp, err)
-		}
-		ip := ap.Addr().Unmap()
-		if !ip.Is4() {
-			return nil, fmt.Errorf("%q is not IPv4", hp)
-		}
-		items = append(items, item{
-			hostport: hp,
-			ip:       ip,
-			lcp:      lcpBits4(ip, t),
-		})
-	}
-
-	// Sort by LCP desc; tie-breaker by numeric IP, then by port string for stability
-	sort.SliceStable(items, func(i, j int) bool {
-		if items[i].lcp != items[j].lcp {
-			return items[i].lcp > items[j].lcp
-		}
-		if items[i].ip != items[j].ip {
-			return items[i].ip.Less(items[j].ip)
-		}
-		// Optional: tie-break by port lexicographically; preserves deterministic order
-		return items[i].hostport < items[j].hostport
-	})
-
-	out := make([]string, len(items))
-	for i := range items {
-		out[i] = items[i].hostport
-	}
-	return out, nil
 }
 
 func (h *DistributionHandler) KeepAlive(c *gin.Context) {

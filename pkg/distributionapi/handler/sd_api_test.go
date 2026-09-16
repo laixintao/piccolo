@@ -2,6 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -37,13 +39,13 @@ func TestFindKeyExcludesRequesterIP(t *testing.T) {
 			want: []string{"10.116.52.76:5127", "10.116.52.72:5127", "10.116.52.73:5127", "10.116.52.74:5127"},
 		},
 		{
-			name: "exclude every port before limiting and prefer closest remaining peer",
+			name: "exclude every port before limiting",
 			holders: []string{
 				"10.116.52.77:5127", "10.116.52.72:5127", "10.116.52.77:15127",
 				"10.116.52.76:5127", "10.116.52.73:5127",
 			},
 			requestHost: "10.116.52.77", count: 2, status: http.StatusOK,
-			want: []string{"10.116.52.76:5127", "10.116.52.72:5127"},
+			want: []string{"10.116.52.76:5127", "10.116.52.72:5127", "10.116.52.73:5127"},
 		},
 		{
 			name: "count one still returns another peer",
@@ -51,7 +53,7 @@ func TestFindKeyExcludesRequesterIP(t *testing.T) {
 				"10.116.52.77:5127", "10.116.52.72:5127", "10.116.52.76:5127",
 			},
 			requestHost: "10.116.52.77", count: 1, status: http.StatusOK,
-			want: []string{"10.116.52.76:5127"},
+			want: []string{"10.116.52.76:5127", "10.116.52.72:5127"},
 		},
 		{
 			name: "only requester is a miss",
@@ -75,16 +77,16 @@ func TestFindKeyExcludesRequesterIP(t *testing.T) {
 			want: []string{"10.116.52.76:5127"},
 		},
 		{
-			name:        "requester absent still prioritizes closest peer",
+			name:        "requester absent samples remaining peers",
 			holders:     []string{"10.116.52.72:5127", "10.116.52.76:5127"},
 			requestHost: "10.116.52.77", status: http.StatusOK,
 			want: []string{"10.116.52.76:5127", "10.116.52.72:5127"},
 		},
 		{
-			name:    "no request host preserves existing behavior",
+			name:    "no request host still samples peers",
 			holders: []string{"10.116.52.77:5127", "10.116.52.76:5127"},
 			count:   1, status: http.StatusOK,
-			want: []string{"10.116.52.77:5127"},
+			want: []string{"10.116.52.77:5127", "10.116.52.76:5127"},
 		},
 		{
 			name:        "missing key remains a miss",
@@ -117,7 +119,13 @@ func TestFindKeyExcludesRequesterIP(t *testing.T) {
 			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 			require.Equal(t, params.Get("key"), response.Key)
 			require.Equal(t, params.Get("group"), response.Group)
-			require.Equal(t, tt.want, response.Holders)
+			limit := tt.count
+			if limit <= 0 {
+				limit = 100
+			}
+			require.Len(t, response.Holders, min(limit, len(tt.want)))
+			require.Subset(t, tt.want, response.Holders)
+			require.Len(t, uniqueHolders(response.Holders), len(response.Holders))
 		})
 	}
 }
@@ -139,5 +147,60 @@ func newFindKeyTestHandler(t *testing.T, holders []string) *DistributionHandler 
 		*result = append([]string(nil), holders...)
 		tx.RowsAffected = int64(len(holders))
 	}))
-	return NewDistributionHandler(storage.NewManager(db, nil, nil), logr.Discard())
+	handler, err := NewDistributionHandler(storage.NewManager(db, nil, nil), logr.Discard(), DefaultPeerCacheConfig())
+	require.NoError(t, err)
+	handler.randomIntN = rand.New(rand.NewPCG(1, 2)).IntN
+	return handler
+}
+
+func uniqueHolders(holders []string) map[string]bool {
+	unique := make(map[string]bool, len(holders))
+	for _, holder := range holders {
+		unique[holder] = true
+	}
+	return unique
+}
+
+func TestFindKeyDistributesFirstAttemptAndFallbacks(t *testing.T) {
+	for _, requester := range []string{"", "10.0.0.1"} {
+		t.Run("requester="+requester, func(t *testing.T) {
+			holders := make([]string, 20)
+			for i := range holders {
+				holders[i] = fmt.Sprintf("10.0.0.%d:5127", i+1)
+			}
+			handler := newFindKeyTestHandler(t, holders)
+			first := make(map[string]int)
+			selected := make(map[string]int)
+			for i := 0; i < 200; i++ {
+				recorder := httptest.NewRecorder()
+				ctx, _ := gin.CreateTestContext(recorder)
+				ctx.Request = httptest.NewRequest(http.MethodGet,
+					"/api/v1/distribution/findkey?key=hot&group=test&count=5&request_host="+requester, nil)
+				handler.FindKey(ctx)
+				require.Equal(t, http.StatusOK, recorder.Code, recorder.Body.String())
+				var response model.FindKeyResponse
+				require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
+				require.Len(t, response.Holders, 5)
+				require.Len(t, uniqueHolders(response.Holders), 5)
+				if requester != "" {
+					require.NotContains(t, response.Holders, requester+":5127")
+				}
+				first[response.Holders[0]]++
+				for _, holder := range response.Holders {
+					selected[holder]++
+				}
+			}
+			eligible := len(holders)
+			if requester != "" {
+				eligible--
+			}
+			// The seeded sequence exercises the real handler, including repeated
+			// cache hits. The nearest peer must not monopolize the first attempt.
+			require.Len(t, first, eligible)
+			require.Len(t, selected, eligible)
+			for _, count := range first {
+				require.Less(t, count, 40)
+			}
+		})
+	}
 }

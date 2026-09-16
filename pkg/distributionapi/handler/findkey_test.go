@@ -26,34 +26,34 @@ func TestFindKeyTotal(t *testing.T) {
 	}
 
 	for _, tt := range []struct {
-		name        string
-		holders     []string
-		query       string
-		wantStatus  int
-		wantHolders []string
-		wantTotal   int
+		name       string
+		holders    []string
+		query      string
+		wantStatus int
+		wantCount  int
+		wantTotal  int
 	}{
 		{
-			name:        "single holder",
-			holders:     []string{"10.0.0.11:5002"},
-			wantStatus:  http.StatusOK,
-			wantHolders: []string{"10.0.0.11:5002"},
-			wantTotal:   1,
+			name:       "single holder",
+			holders:    []string{"10.0.0.11:5002"},
+			wantStatus: http.StatusOK,
+			wantCount:  1,
+			wantTotal:  1,
 		},
 		{
-			name:        "count limits holders but not total",
-			holders:     []string{"10.0.0.11:5002", "10.0.0.12:5002"},
-			query:       "&count=1",
-			wantStatus:  http.StatusOK,
-			wantHolders: []string{"10.0.0.11:5002"},
-			wantTotal:   2,
+			name:       "count limits holders but not total",
+			holders:    []string{"10.0.0.11:5002", "10.0.0.12:5002"},
+			query:      "&count=1",
+			wantStatus: http.StatusOK,
+			wantCount:  1,
+			wantTotal:  2,
 		},
 		{
-			name:        "default limit preserves total",
-			holders:     manyHolders,
-			wantStatus:  http.StatusOK,
-			wantHolders: manyHolders[:100],
-			wantTotal:   101,
+			name:       "default limit preserves total",
+			holders:    manyHolders,
+			wantStatus: http.StatusOK,
+			wantCount:  100,
+			wantTotal:  101,
 		},
 		{
 			name:       "no holders remains not found",
@@ -86,7 +86,8 @@ func TestFindKeyTotal(t *testing.T) {
 			recorder := httptest.NewRecorder()
 			ctx, _ := gin.CreateTestContext(recorder)
 			ctx.Request = httptest.NewRequest(http.MethodGet, "/api/v1/distribution/findkey?key=test-key&group=default"+tt.query, nil)
-			handler := NewDistributionHandler(storage.NewManager(db, nil, nil), logr.Discard())
+			handler, err := NewDistributionHandler(storage.NewManager(db, nil, nil), logr.Discard(), DefaultPeerCacheConfig())
+			require.NoError(t, err)
 			handler.FindKey(ctx)
 
 			require.Equal(t, 1, queries, "total must not require a separate count query")
@@ -99,7 +100,10 @@ func TestFindKeyTotal(t *testing.T) {
 			require.NoError(t, json.Unmarshal(recorder.Body.Bytes(), &response))
 			require.Equal(t, "test-key", response.Key)
 			require.Equal(t, "default", response.Group)
-			require.Equal(t, tt.wantHolders, response.Holders)
+			// Selection is random: count and membership are stable, order is not.
+			require.Len(t, response.Holders, tt.wantCount)
+			require.Subset(t, tt.holders, response.Holders)
+			require.Len(t, uniqueHolders(response.Holders), tt.wantCount)
 			require.Equal(t, tt.wantTotal, response.Total)
 		})
 	}

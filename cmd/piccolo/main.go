@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"os"
+	"time"
 
 	"log/slog"
 
@@ -35,9 +36,18 @@ type GlobalArgs struct {
 
 type ServerCmd struct {
 	GlobalArgs
-	PiccoloAddress string   `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
-	EnableEvictor  bool     `arg:"--enable-evictor,env:ENABLE_EVICTOR" default:"false" help:"Enable evictor to clean up dead hosts automatically"`
-	DbDsnList      []string `arg:"--db-dsn-list,env:DB_DSN_LIST,required" help:"DB DSN list in format '<group>:<dbtype>:<dsn>'. dbtype can be 'master' or 'slave'. Example: 'default:master:user:pass@tcp(host:3306)/db1' 'us-1:master:user:pass@tcp(host:3306)/db2'"`
+	PiccoloAddress           string        `arg:"--piccolo-address,env:HOST" default:"0.0.0.0:7789" help:"Piccolo HTTP address"`
+	EnableEvictor            bool          `arg:"--enable-evictor,env:ENABLE_EVICTOR" default:"false" help:"Enable evictor to clean up dead hosts automatically"`
+	DbDsnList                []string      `arg:"--db-dsn-list,env:DB_DSN_LIST,required" help:"DB DSN list in format '<group>:<dbtype>:<dsn>'. dbtype can be 'master' or 'slave'. Example: 'default:master:user:pass@tcp(host:3306)/db1' 'us-1:master:user:pass@tcp(host:3306)/db2'"`
+	PeerCacheMaxKeys         int           `arg:"--peer-cache-max-keys,env:PEER_CACHE_MAX_KEYS" default:"1024" help:"Maximum number of (group, key) candidate pools cached by this API process. Must be positive."`
+	PeerCacheMaxHolders      int           `arg:"--peer-cache-max-holders,env:PEER_CACHE_MAX_HOLDERS" default:"100000" help:"Maximum total number of holder entries cached across candidate pools. Must be positive."`
+	PeerCacheRefreshInterval time.Duration `arg:"--peer-cache-refresh-interval,env:PEER_CACHE_REFRESH_INTERVAL" default:"10s" help:"Maximum age of a candidate pool before on-demand rotation, with up to 20% jitter. Must be positive."`
+}
+
+func (a *ServerCmd) peerCacheConfig() distributionHandler.PeerCacheConfig {
+	return distributionHandler.PeerCacheConfig{
+		MaxKeys: a.PeerCacheMaxKeys, MaxHolders: a.PeerCacheMaxHolders, RefreshInterval: a.PeerCacheRefreshInterval,
+	}
 }
 
 type MigrateCmd struct {
@@ -93,6 +103,10 @@ func runServer(args *ServerCmd) {
 	handler := slog.NewTextHandler(os.Stdout, &opts)
 	log := logr.FromSlogHandler(handler)
 	log.Info("log init, Piccolo started")
+	if err := args.peerCacheConfig().Validate(); err != nil {
+		log.Error(err, "invalid peer cache configuration")
+		os.Exit(1)
+	}
 
 	db, groups, masterResolvers, err := storage.InitMySQL(args.DbDsnList)
 	if err != nil {
@@ -103,8 +117,14 @@ func runServer(args *ServerCmd) {
 	log.Info("MySQL database connected", "groups", groups, "masterResolvers", masterResolvers)
 
 	dbm := storage.NewManager(db, groups, masterResolvers)
-	distributionHandler := distributionHandler.NewDistributionHandler(dbm, log)
 	defer dbm.Close()
+	distributionHandler, err := distributionHandler.NewDistributionHandler(dbm, log, args.peerCacheConfig())
+	if err != nil {
+		log.Error(err, "failed to initialize peer discovery")
+		os.Exit(1)
+	}
+	log.Info("peer candidate cache initialized", "max_keys", args.PeerCacheMaxKeys,
+		"max_holders", args.PeerCacheMaxHolders, "refresh_interval", args.PeerCacheRefreshInterval)
 
 	log.Info("image store initialized")
 
@@ -153,7 +173,7 @@ func runServer(args *ServerCmd) {
 	log.Info("server starting", "piccolo-address", args.PiccoloAddress, "evictor-enabled", args.EnableEvictor)
 
 	ctx := logr.NewContext(context.Background(), log)
-	
+
 	// Set evictor enabled metric
 	if args.EnableEvictor {
 		metrics.EvictorEnabled.Set(1)
