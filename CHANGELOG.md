@@ -2,6 +2,13 @@
 
 Highlights from tagged snapshots and commit history; early patch releases are grouped.
 
+## Unreleased
+
+- Rotate Piccolo peer candidate pools with indexed holder cursors, and randomly select and order peers on every lookup to distribute first-attempt downloads.
+- Bound the API candidate cache by both key count and total holder entries; add configurable refresh intervals with jitter and coalesce concurrent refreshes.
+
+Upgrade the Piccolo server to enable randomized discovery; Pi and the database schema need no changes.
+
 ## v0.2.2 — 2026-09-15
 
 - Prevent Pi self-downloads by excluding the requester IP, across all ports, from Piccolo's `findkey` results before peer selection and count limiting.

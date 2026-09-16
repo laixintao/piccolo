@@ -41,7 +41,10 @@ func (m *DistributionManager) CreateDistributions(distributions []*model.Distrib
 	return err
 }
 
-func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, key string) ([]string, error) {
+// GetHolderWindow reads a bounded window in holder order, wrapping at the end.
+// Both ranges can use the (group, key, holder) index. The upper bound on the wrapped
+// query keeps the two ranges disjoint, even when the key has fewer than limit peers.
+func (m *DistributionManager) GetHolderWindow(ctx context.Context, group, key, after string, limit int) ([]string, error) {
 	start := time.Now()
 	var retErr error
 	defer func() {
@@ -53,14 +56,33 @@ func (m *DistributionManager) GetHolderByKey(ctx context.Context, group string, 
 		metrics.DBQueryDuration.WithLabelValues("distribution_tab", "get_holder_by_key", group, status).Observe(time.Since(start).Seconds())
 	}()
 
-	var holders []string
-	query := m.db.WithContext(ctx).
-		Clauses(dbresolver.Use(group)).
-		Model(&model.Distribution{}).
-		Where("`group` = ? AND `key` = ?", group, key).
-		Limit(FindKeyMaxResults)
+	if limit <= 0 || limit > FindKeyMaxResults {
+		retErr = fmt.Errorf("holder window limit must be between 1 and %d", FindKeyMaxResults)
+		return nil, retErr
+	}
+	readPage := func(after, through string, count int) ([]string, error) {
+		var holders []string
+		query := m.db.WithContext(ctx).
+			Clauses(dbresolver.Use(group)).
+			Model(&model.Distribution{}).
+			Where("`group` = ? AND `key` = ?", group, key)
+		if after != "" {
+			query = query.Where("`holder` > ?", after)
+		}
+		if through != "" {
+			query = query.Where("`holder` <= ?", through)
+		}
+		err := query.Order("holder ASC").Limit(count).Pluck("holder", &holders).Error
+		return holders, err
+	}
 
-	if err := query.Pluck("holder", &holders).Error; err != nil {
+	holders, err := readPage(after, "", limit)
+	if err == nil && after != "" && len(holders) < limit {
+		var head []string
+		head, err = readPage("", after, limit-len(holders))
+		holders = append(holders, head...)
+	}
+	if err != nil {
 		retErr = fmt.Errorf("failed to get holders by key %s: %w", key, err)
 		return nil, retErr
 	}

@@ -41,13 +41,67 @@ namespace names are rejected at startup. Namespaces must be listed explicitly.
 
 Pi sends the IP from `--pi-listen-addr` as `request_host` when calling Piccolo's
 `GET /api/v1/distribution/findkey` endpoint. The API excludes all holders with
-that IP, including holders using a different port, before prioritizing the
-nearest remaining IPv4 holder and applying `count`.
+that IP, including holders using a different port, before randomly sampling
+distinct holders and applying `count`. The first peer is random too: Pi tries
+peers in response order, so always putting the nearest IP first concentrates
+downloads on that machine. Selection stays within the requested group and no
+longer ranks candidates by IPv4 prefix.
 
-If only the requester's IP holds the key, the API returns HTTP 404 and Pi treats
-the lookup as a miss. Requests without `request_host` retain the existing
-behavior and do not exclude any IP. This change takes effect when the Piccolo
-server is updated; existing Pis already send `request_host`.
+If no candidates remain after exclusion, the API returns HTTP 404 and Pi treats
+the lookup as a miss. Requests without `request_host` also use random selection
+but do not exclude any IP. This behavior requires updating the Piccolo server;
+existing Pis already send `request_host` and need no changes.
+
+## Rotating candidate pools
+
+Each API process caches up to 2,000 holders per `(group, key)`. Every request
+samples its own peers from that pool without modifying the cached ordering.
+When a pool expires, the next request advances through the existing
+`(group, key, holder)` index using `holder > last_holder ORDER BY holder LIMIT ...`.
+At the end, another bounded query fills the window from the beginning, with an
+upper bound preventing duplicate holders. No full scan, random SQL sort, or
+large OFFSET is needed for a refresh.
+
+Piccolo server settings (all must be positive):
+
+| Flag | Environment variable | Default |
+| --- | --- | --- |
+| `--peer-cache-max-keys` | `PEER_CACHE_MAX_KEYS` | `1024` |
+| `--peer-cache-max-holders` | `PEER_CACHE_MAX_HOLDERS` | `100000` |
+| `--peer-cache-refresh-interval` | `PEER_CACHE_REFRESH_INTERVAL` | `10s` |
+
+The holder limit counts entries across **all** cached pools, including the same
+holder appearing in multiple keys. A limit below 2,000 also reduces each pool's
+size. The least recently used pools are evicted to satisfy both limits.
+Eviction or API restart discards a pool's cursor; its next lookup starts at the
+beginning. These limits bound retained candidate data, not total process memory
+or temporary data for in-flight requests.
+
+Refresh happens on demand after 80-100% of the configured interval (8-10 seconds
+by default); cache hits do not extend it. Concurrent refreshes of the same pool
+share one query sequence. Callers can cancel independently; the shared query
+has a two-second timeout. Failed refreshes return an error and retain the old
+cursor for retry. Empty results are not cached, so newly advertised keys can be
+queried immediately.
+
+This provides random selection within the current pool and rotation across all
+holders over time, rather than uniform sampling from the entire database on
+every request. For a continuously requested key with 100,000 holders, 50 windows
+cover one pass while its pool remains cached. Withdrawn holders can remain in a
+pool until refresh, and new holders behind the cursor join on a later pass.
+Database replication lag can further delay visibility. Pi's existing peer
+retries handle candidates that no longer serve the content.
+
+API processes maintain independent cursors that all start at the beginning.
+Multiple API nodes can therefore query overlapping or identical holder windows,
+especially after startup or cache eviction. Refresh jitter changes timing but
+does not guarantee distinct ranges across API nodes; cross-node range spreading
+is deferred.
+
+The `found holders for key` log includes `cache_result` (`hit`, `refresh`, or
+`shared_refresh`), `candidate_count`, `excluded_self_count`, `selection=random`,
+and `returned_count`. Candidate count describes the current pool, not the total
+number of holders in the database.
 
 # Advertisement deduplication
 
