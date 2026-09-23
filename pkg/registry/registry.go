@@ -119,16 +119,28 @@ func (r *Registry) Server(addr string) (*http.Server, error) {
 	return srv, nil
 }
 
+// metricsPath returns a low-cardinality label value for the "handler" metric
+// label. Any path outside the known, bounded set of registered routes is
+// bucketed under "unmatched" so that scanning/probing traffic against
+// unregistered paths cannot create unbounded Prometheus label cardinality.
+func metricsPath(req *http.Request) string {
+	switch {
+	case req.URL.Path == "/healthz":
+		return "/healthz"
+	case strings.HasPrefix(req.URL.Path, "/v2"):
+		return "/v2/*"
+	default:
+		return "unmatched"
+	}
+}
+
 func (r *Registry) handle(rw mux.ResponseWriter, req *http.Request) {
 	start := time.Now()
 	req = logging.Request(req, r.log.WithValues("client_ip", getClientIP(req), "registry", req.URL.Query().Get("ns"), "path", req.URL.Path, "method", req.Method))
 	log := logr.FromContextOrDiscard(req.Context())
 	handler := ""
 	result := "error"
-	path := req.URL.Path
-	if strings.HasPrefix(path, "/v2") {
-		path = "/v2/*"
-	}
+	path := metricsPath(req)
 	defer func() {
 		latency := time.Since(start)
 		statusCode := strconv.FormatInt(int64(rw.Status()), 10)

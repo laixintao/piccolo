@@ -93,10 +93,7 @@ func (r *PiServer) handle(rw mux.ResponseWriter, req *http.Request) {
 	req = logging.Request(req, r.log.WithValues("peer", req.RemoteAddr, "client_ip", getClientIP(req), "registry", req.URL.Query().Get("ns"), "path", req.URL.Path, "method", req.Method))
 	log := logr.FromContextOrDiscard(req.Context())
 	handler := ""
-	path := req.URL.Path
-	if strings.HasPrefix(path, "/v2") {
-		path = "/v2/*"
-	}
+	path := metricsPath(req)
 	defer func() {
 		latency := time.Since(start)
 		statusCode := strconv.FormatInt(int64(rw.Status()), 10)
