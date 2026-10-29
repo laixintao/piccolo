@@ -332,3 +332,15 @@ func TestAdvertiseWaitsForSyncAndSupportsCancellation(t *testing.T) {
 		{"advertise", []string{"a"}}, {"sync", []string{}}, {"advertise", []string{"a"}},
 	}, transport.recorded())
 }
+
+func TestWithProxyOnlyAffectsServiceDiscoveryClient(t *testing.T) {
+	proxyURL, err := url.Parse("http://proxy.example.com:3128")
+	require.NoError(t, err)
+	p, err := NewPiccoloServiceDiscover(url.URL{Scheme: "http", Host: "piccolo.example.com"}, logr.Discard(), "127.0.0.1:5000", "g", WithProxy(proxyURL))
+	require.NoError(t, err)
+	req, err := http.NewRequest(http.MethodGet, "http://piccolo.example.com/api", nil)
+	require.NoError(t, err)
+	got, err := p.httpClient.Transport.(*http.Transport).Proxy(req)
+	require.NoError(t, err)
+	require.Equal(t, proxyURL, got)
+}

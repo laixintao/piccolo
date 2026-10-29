@@ -54,6 +54,19 @@ func WithAdvertiseCacheMaxKeys(maxKeys int) Option {
 	}
 }
 
+// WithProxy routes requests to the Piccolo API through proxyURL. It only
+// affects service discovery; image downloads use their own HTTP clients.
+func WithProxy(proxyURL *url.URL) Option {
+	return func(p *PiccoloServiceDiscover) {
+		if proxyURL == nil {
+			return
+		}
+		if t, ok := p.httpClient.Transport.(*http.Transport); ok {
+			t.Proxy = http.ProxyURL(proxyURL)
+		}
+	}
+}
+
 func NewPiccoloServiceDiscover(piccoloAddress url.URL, log logr.Logger, piAddr string, group string, opts ...Option) (*PiccoloServiceDiscover, error) {
 	httpClient := &http.Client{
 		Transport: &http.Transport{

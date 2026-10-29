@@ -189,3 +189,18 @@ rg 'component=download' pi.log
 rg 'component=piccolo' pi.log
 rg 'request_id=847cd673-878a-4fd1-b267-03688ca43c98' pi-*.log
 ```
+
+# Service discovery proxy
+
+To reach the Piccolo API through an HTTP(S) proxy, set:
+
+```sh
+--piccolo-proxy http://proxy.example.com:3128
+# Or use the environment variable:
+PICCOLO_PROXY=http://proxy.example.com:3128
+```
+
+The proxy is used only for Piccolo service-discovery requests (resolve,
+advertise, sync, keepalive). Image downloads from other Pis or registries are
+not affected. When unset, the standard `HTTP_PROXY`/`HTTPS_PROXY`/`NO_PROXY`
+environment variables apply to service discovery as before.

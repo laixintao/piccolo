@@ -43,6 +43,7 @@ type Arguments struct {
 	LogLevel                    slog.Level    `arg:"--log-level,env:LOG_LEVEL" default:"INFO" help:"Minimum log level to output. Value should be DEBUG, INFO, WARN, or ERROR."`
 	ResolveLatestTag            bool          `arg:"--resolve-latest-tag,env:RESOLVE_LATEST_TAG" default:"true" help:"When true latest tags will be resolved to digests."`
 	PiccoloAddress              url.URL       `arg:"--piccolo-api,env:PICCOLO_ADDRESS" help:"Piccolo API URL for central service discovery"`
+	PiccoloProxy                *url.URL      `arg:"--piccolo-proxy,env:PICCOLO_PROXY" help:"HTTP(S) proxy URL used only for Piccolo service discovery API requests; does not affect image downloads. Falls back to proxy environment variables when unset."`
 	FullRefreshMinutes          int64         `arg:"--full-refresh-minutes,env:PI_REFRESH_MINUTES" default:"60" help:"Positive interval in minutes between full image state updates."`
 	AdvertiseCacheMaxKeys       int           `arg:"--advertise-cache-max-keys,env:ADVERTISE_CACHE_MAX_KEYS" default:"100000" help:"Maximum number of keys cached for five-hour advertisement deduplication. Must be positive."`
 	MaxUploadConnections        int           `arg:"--max-upload-connections,env:MAX_UPLOAD_CONNECTIONS" default:"5" help:"Max connection used to upload images to other peers."`
@@ -104,7 +105,7 @@ func main() {
 	controlLog.V(4).Info("containerd client initialized", "event", "startup_ready", "subsystem", "containerd")
 
 	piccoloSD, err := sd.NewPiccoloServiceDiscover(args.PiccoloAddress, log, args.PiAddr, args.Group,
-		sd.WithAdvertiseCacheMaxKeys(args.AdvertiseCacheMaxKeys))
+		sd.WithAdvertiseCacheMaxKeys(args.AdvertiseCacheMaxKeys), sd.WithProxy(args.PiccoloProxy))
 	if err != nil {
 		controlLog.Error(err, "Piccolo client initialization failed", "event", "startup_failed")
 		os.Exit(1)
